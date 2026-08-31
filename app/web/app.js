@@ -509,16 +509,10 @@ function renderPrepSheet(prep) {
     <details class="paste-box"${prep.has_profile ? '' : ' open'}>
       <summary>${prep.has_profile ? 'Update the pasted profile' : 'Paste their LinkedIn profile'}</summary>
       <p class="small muted" style="margin:10px 0">
-        LinkedIn requires a login and blocks automated fetching from outside the
-        browser, so this reads a tab you already have open instead. Open ${link}
-        in Safari or Chrome, make it the front tab, and click Fetch — or select
-        the page (⌘A), copy (⌘C), and paste below yourself. Either way, nothing
-        leaves this Mac. The Experience and Education sections are the parts
-        that matter.
+        LinkedIn requires a login and blocks automated access, so this app cannot
+        fetch it for you. Open ${link}, select the page (⌘A) and copy (⌘C), then
+        paste below. The Experience and Education sections are the parts that matter.
       </p>
-      <div class="row" style="margin-bottom:8px">
-        <button class="btn ghost sm" id="prep-fetch" data-id="${p.id}">Fetch from open browser tab</button>
-      </div>
       <textarea id="prep-raw" rows="7" placeholder="Paste the profile here…"></textarea>
       <button class="btn primary sm" id="prep-parse" data-id="${p.id}" style="margin-top:8px">
         ${prep.has_profile ? 'Re-read profile' : 'Build prep sheet'}</button>
@@ -651,25 +645,6 @@ function paintPrep(prep) {
   $('#m-title').textContent = 'Prep — ' + prep.person.name;
   $('#m-body').innerHTML = renderPrepSheet(prep);
 
-  const fetchBtn = $('#prep-fetch');
-  if (fetchBtn) {
-    fetchBtn.onclick = async () => {
-      fetchBtn.disabled = true;
-      fetchBtn.textContent = 'Reading tab…';
-      try {
-        const res = await api('/api/browser-profile', 'POST', {});
-        $('#prep-raw').value = res.text || '';
-        toast(res.demo ? 'Demo profile loaded (not running on macOS)'
-                        : `Pulled from ${res.browser}: ${res.url}`);
-      } catch (e) {
-        toast(e.message, true);
-      } finally {
-        fetchBtn.disabled = false;
-        fetchBtn.textContent = 'Fetch from open browser tab';
-      }
-    };
-  }
-
   const btn = $('#prep-parse');
   if (!btn) return;
   btn.onclick = async () => {
@@ -703,49 +678,21 @@ async function openPrep(personId) {
 
 function openAddPerson() {
   openModal('Add person', `
-    <div class="row" style="margin-bottom:10px">
-      <button class="btn ghost sm" id="n-fetch">Fill from open LinkedIn tab</button>
-      <span class="small faint">Reads the profile you're already looking at in Safari or Chrome.</span>
-    </div>
     <div class="grid-2">
       <label class="field"><span>Name *</span><input type="text" id="n-name"></label>
       <label class="field"><span>Email</span><input type="email" id="n-email"></label>
       <label class="field"><span>Firm</span><input type="text" id="n-firm"></label>
       <label class="field"><span>Role</span><input type="text" id="n-role"></label>
     </div>
-    <label class="field"><span>LinkedIn URL</span><input type="text" id="n-linkedin"></label>
     <label class="field"><span>How you found them</span><input type="text" id="n-source" placeholder="GCA board, LinkedIn, intro from…"></label>
     <div class="row"><button class="btn primary" id="n-save">Add</button>
       <span class="small faint">Start with second-years and recent grads.</span></div>`);
-
-  $('#n-fetch').onclick = async () => {
-    const fbtn = $('#n-fetch');
-    fbtn.disabled = true;
-    fbtn.textContent = 'Reading tab…';
-    try {
-      const res = await api('/api/browser-profile', 'POST', {});
-      if (res.name) $('#n-name').value = res.name;
-      if (res.firm) $('#n-firm').value = res.firm;
-      if (res.role) $('#n-role').value = res.role;
-      if (res.url) $('#n-linkedin').value = res.url;
-      $('#n-source').value = 'LinkedIn';
-      toast(res.demo ? 'Demo profile loaded (not running on macOS)'
-                      : 'Filled from the open profile — check it over before saving.');
-    } catch (e) {
-      toast(e.message, true);
-    } finally {
-      fbtn.disabled = false;
-      fbtn.textContent = 'Fill from open LinkedIn tab';
-    }
-  };
-
   $('#n-save').onclick = async () => {
     const name = $('#n-name').value.trim();
     if (!name) return toast('A name is required', true);
     const res = await api('/api/person', 'POST', {
       name, email: $('#n-email').value.trim(), firm: $('#n-firm').value.trim(),
-      role: $('#n-role').value.trim(), linkedin: $('#n-linkedin').value.trim(),
-      source: $('#n-source').value.trim(),
+      role: $('#n-role').value.trim(), source: $('#n-source').value.trim(),
     });
     closeModal();
     await refresh();

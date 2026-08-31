@@ -33,7 +33,6 @@ xcode-select --install
 |---|---|---|
 | Calendar access | Reading busy time to propose conflict-free slots | Slots tab stops working; everything else is fine |
 | Control "Microsoft Outlook" | Opening drafts, checking who replied | Draft and mail-scan buttons stop working; you can still copy text |
-| Control "Safari" / "Google Chrome" | Reading the LinkedIn profile tab you already have open, when you click Fetch | The Fetch button stops working; you can still paste profiles by hand |
 
 Both can be changed later in **System Settings → Privacy & Security**, under
 **Calendars** and **Automation**.
@@ -88,22 +87,10 @@ The great ones carry your own context, which is what makes them great.
 The **Prep** button next to an upcoming chat (and in the person panel) builds a
 briefing for that specific person.
 
-LinkedIn requires a login and blocks automated access from outside the browser,
-so the app can't reach out and fetch a profile on its own. What it can do is
-read a tab you already have open: navigate to their profile in Safari or Chrome
-yourself, click **Fetch from open browser tab** on the prep sheet, and it reads
-that one page — your own logged-in session, one profile at a time, nothing
-searched or crawled. The first time, macOS will ask permission to let Coffee
-Chat Tracker control Safari or Chrome; that's this. If you'd rather not grant
-it, open their profile, select all, copy, and paste it into the box instead —
-same result. Either way, everything after that is local — the text is stored
-in your own database and never leaves the Mac.
-
-The same Fetch action is available from **Add person**, to pre-fill a new
-contact's name, firm, role, and LinkedIn URL from a profile you're already
-looking at. It reads one page at a time, on request — it does not search
-LinkedIn or pull alumni lists for you; that kind of bulk automation is exactly
-what LinkedIn's terms prohibit, and doing it risks your account.
+LinkedIn requires a login and blocks automated access, so the app cannot fetch a
+profile for you. Open their profile, select all, copy, and paste it into the box
+on the prep sheet. Everything after that is local — the paste is stored in your
+own database and never leaves the Mac.
 
 From the paste it reads their actual career — roles, employers, how long each
 lasted, education — and works out what is worth asking about:

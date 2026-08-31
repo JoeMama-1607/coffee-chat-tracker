@@ -29,6 +29,6 @@
 	<key>NSCalendarsWriteOnlyAccessUsageDescription</key>
 	<string>Coffee Chat Tracker adds a confirmed coffee chat to your calendar when you click Add to Apple Calendar.</string>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>Coffee Chat Tracker asks Outlook to open pre-filled email drafts for you to review, and reads message dates to work out who has replied. It also reads the LinkedIn profile tab you already have open in Safari or Chrome, when you click Fetch. It never sends anything and never browses on its own.</string>
+	<string>Coffee Chat Tracker asks Outlook to open pre-filled email drafts for you to review, and reads message dates to work out who has replied. It never sends anything.</string>
 </dict>
 </plist>

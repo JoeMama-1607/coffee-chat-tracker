@@ -473,9 +473,6 @@ class Handler(BaseHTTPRequestHandler):
             _outlook_status["checked"] = True
             return self._json({"ok": True, "outlook": _outlook_status})
 
-        if path == "/api/browser-profile":
-            return self._browser_profile()
-
         if path == "/api/calendar-event":
             result = macos.create_calendar_event(
                 body.get("title", "Coffee chat"), body.get("start"), body.get("end"),
@@ -484,25 +481,6 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": bool(result.get("ok")), **result})
 
         return self._error("unknown endpoint", 404)
-
-    def _browser_profile(self):
-        """Read the LinkedIn tab the user already has open. Returns the raw
-        text plus a light parse — the caller decides whether that's headed
-        for a prep sheet paste or a new-contact form. Nothing is saved here."""
-        result = macos.read_browser_profile()
-        parsed = profile_reader.parse(result.get("text", ""))
-        current = (parsed.get("roles") or [{}])[0]
-        return self._json({
-            "ok": True,
-            "url": result.get("url", ""),
-            "browser": result.get("browser", ""),
-            "text": result.get("text", ""),
-            "name": parsed.get("name", ""),
-            "headline": parsed.get("headline", ""),
-            "firm": current.get("company", ""),
-            "role": current.get("title", ""),
-            **({"demo": True} if result.get("demo") else {}),
-        })
 
     def _prep(self, body, settings):
         """Shared by the on-screen prep sheet and the PDF, so the two can never

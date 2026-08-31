@@ -196,33 +196,6 @@ def scan_outlook(days_back=30, max_messages=400):
     return messages, diagnostics
 
 
-# ------------------------------------------------------------------- Browser
-
-def read_browser_profile():
-    """Read the LinkedIn profile in whichever open tab (Safari or Chrome)
-    already has one, in the user's own logged-in session. Reads only, never
-    searches or navigates."""
-    if DEMO:
-        return {
-            "ok": True, "browser": "Demo", "demo": True,
-            "url": "https://www.linkedin.com/in/demo-consultant/",
-            "text": "Jordan Rivera\nSenior Associate at Bain & Company\n"
-                    "Atlanta, Georgia, United States\n\nExperience\n"
-                    "Bain & Company\n2 yrs 3 mos\nSenior Associate\nJan 2024 - Present\n"
-                    "Associate Consultant\nJun 2022 - Dec 2023\n\n"
-                    "Deloitte\nBusiness Analyst\nJul 2020 - May 2022\n\n"
-                    "Education\nEmory University, Goizueta Business School\nMBA\n2020 - 2022",
-        }
-    raw = _run(["osascript", "-l", "JavaScript", _script("browser_read.js")], DETECT_TIMEOUT)
-    try:
-        payload = json.loads(raw)
-    except ValueError:
-        raise BridgeError("Unexpected reply from the browser script: %s" % raw[:400])
-    if not payload.get("ok"):
-        raise BridgeError(payload.get("error", "Could not read the browser tab."))
-    return payload
-
-
 def draft_email(to_address, to_name, subject, body, attachment=""):
     """Open a pre-filled draft in Outlook. Never sends."""
     if DEMO:
