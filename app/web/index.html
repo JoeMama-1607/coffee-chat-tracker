@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Coffee Chat Tracker</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<script>window.CCT_TOKEN = "__CCT_TOKEN__";</script>
+
+<div class="app">
+  <nav class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">☕</div>
+      <div class="brand-text">
+        <div class="brand-title">Coffee Chats</div>
+        <div class="brand-sub">Consulting recruiting</div>
+      </div>
+    </div>
+
+    <button class="nav-item active" data-view="today">
+      <span>◉</span><span class="txt">Today</span><span class="count" id="nav-actions">0</span>
+    </button>
+    <button class="nav-item" data-view="pipeline">
+      <span>▤</span><span class="txt">Pipeline</span><span class="count" id="nav-people">0</span>
+    </button>
+    <button class="nav-item" data-view="slots">
+      <span>◷</span><span class="txt">Slots</span>
+    </button>
+    <button class="nav-item" data-view="prep">
+      <span>✎</span><span class="txt">Prep</span>
+    </button>
+    <button class="nav-item" data-view="settings">
+      <span>⚙</span><span class="txt">Settings</span>
+    </button>
+
+    <div class="sidebar-foot">
+      <div id="status-cal"><span class="dot warn"></span>Calendar not checked</div>
+      <div id="status-outlook" style="margin-top:5px"><span class="dot warn"></span>Outlook not checked</div>
+    </div>
+  </nav>
+
+  <main class="main">
+
+    <!-- ------------------------------------------------------- TODAY -->
+    <section class="view active" id="view-today">
+      <h1>Today</h1>
+      <p class="lede">What recruiting actually needs from you right now. The clock
+        follows the GCA rules: thank-you notes inside 24 hours, a nudge after a
+        week of silence, and no more than three.</p>
+
+      <div id="today-banners"></div>
+
+      <div class="stat-row" id="stats"></div>
+
+      <h2>Needs action</h2>
+      <div id="actions"></div>
+
+      <h2>Upcoming chats</h2>
+      <div id="upcoming"></div>
+
+      <h2>Firm coverage</h2>
+      <div class="card" id="coverage"></div>
+    </section>
+
+    <!-- ---------------------------------------------------- PIPELINE -->
+    <section class="view" id="view-pipeline">
+      <div class="row between">
+        <div>
+          <h1>Pipeline</h1>
+          <p class="lede" style="margin-bottom:16px">Everyone you are talking to,
+            and exactly where each conversation stands.</p>
+        </div>
+        <button class="btn primary" id="btn-add">+ Add person</button>
+      </div>
+
+      <div class="row" style="margin-bottom:12px">
+        <input type="text" id="filter-search" placeholder="Search name, firm, role…" style="max-width:280px">
+        <select id="filter-status" style="max-width:180px"><option value="">All statuses</option></select>
+        <select id="filter-firm" style="max-width:180px"><option value="">All firms</option></select>
+        <div class="spacer"></div>
+        <button class="btn ghost sm" id="btn-import">Import from list</button>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th><th>Firm</th><th>Role</th><th>Status</th>
+              <th>Last contact</th><th>Chat</th><th></th>
+            </tr>
+          </thead>
+          <tbody id="people-rows"></tbody>
+        </table>
+      </div>
+      <div id="pipeline-empty"></div>
+    </section>
+
+    <!-- ------------------------------------------------------- SLOTS -->
+    <section class="view" id="view-slots">
+      <h1>Availability</h1>
+      <p class="lede">Reads your Apple Calendar, subtracts everything you are
+        already committed to plus a buffer, and gives you conflict-free windows
+        formatted the way the deck's example email lays them out.</p>
+
+      <div id="slots-banner"></div>
+
+      <div class="card" style="margin-bottom:18px">
+        <h3>Rules</h3>
+        <div class="grid-3">
+          <label class="field"><span>Working hours start</span><input type="time" id="r-work_start"></label>
+          <label class="field"><span>Working hours end</span><input type="time" id="r-work_end"></label>
+          <label class="field"><span>Time zone label</span><input type="text" id="r-tz_label" placeholder="ET"></label>
+        </div>
+        <label class="field"><span>Days you'll take chats</span>
+          <div class="row" id="r-work_days"></div>
+        </label>
+        <div class="grid-3">
+          <label class="field"><span>Minimum window (min)</span><input type="number" id="r-min_window_minutes" min="30" step="15"></label>
+          <label class="field"><span>Buffer around events (min)</span><input type="number" id="r-buffer_minutes" min="0" step="5"></label>
+          <label class="field"><span>Earliest, days out</span><input type="number" id="r-lead_days" min="0"></label>
+        </div>
+        <div class="grid-3">
+          <label class="field"><span>Look ahead (days)</span><input type="number" id="r-horizon_days" min="3"></label>
+          <label class="field"><span>Days to offer</span><input type="number" id="r-slots_wanted" min="1" max="6"></label>
+          <label class="field"><span>Windows per day</span><input type="number" id="r-max_per_day" min="1" max="4"></label>
+        </div>
+        <label class="field"><span>Calendars to ignore (comma separated)</span>
+          <input type="text" id="r-excluded_calendars" placeholder="Birthdays, Holidays"></label>
+        <div class="row">
+          <button class="btn gold" id="btn-find-slots">Find my availability</button>
+          <button class="btn ghost sm" id="btn-save-rules">Save rules</button>
+        </div>
+      </div>
+
+      <div id="slots-result"></div>
+    </section>
+
+    <!-- -------------------------------------------------------- PREP -->
+    <section class="view" id="view-prep">
+      <h1>Prep</h1>
+      <p class="lede">The structure a coffee chat tends to follow, and questions
+        worth having in your pocket. Copy one, then make it yours — the generic
+        version is the one they've heard four times this week.</p>
+
+      <h2>How the call runs</h2>
+      <div class="card" id="call-structure"></div>
+
+      <h2>Question bank</h2>
+      <div class="pill-tabs" id="q-tabs">
+        <button class="active" data-tier="">All</button>
+        <button data-tier="great">Great</button>
+        <button data-tier="good">Good</button>
+      </div>
+      <div id="questions"></div>
+    </section>
+
+    <!-- ---------------------------------------------------- SETTINGS -->
+    <section class="view" id="view-settings">
+      <h1>Settings</h1>
+      <p class="lede">Your details fill the signature block and the resume
+        attachment on every draft.</p>
+
+      <div class="card" style="margin-bottom:18px">
+        <h3>You</h3>
+        <div class="grid-2">
+          <label class="field"><span>Full name</span><input type="text" id="s-user_name"></label>
+          <label class="field"><span>Email</span><input type="email" id="s-user_email"></label>
+        </div>
+        <label class="field"><span>Program line</span><input type="text" id="s-user_program"></label>
+        <label class="field"><span>School line</span><input type="text" id="s-user_school"></label>
+        <div class="grid-2">
+          <label class="field"><span>Phone</span><input type="text" id="s-user_phone"></label>
+          <label class="field"><span>LinkedIn</span><input type="text" id="s-user_linkedin"></label>
+        </div>
+        <label class="field"><span>Resume path (attached to every outreach draft)</span>
+          <input type="text" id="s-resume_path" placeholder="/Users/you/Documents/Resume.pdf"></label>
+        <label class="field"><span>Time zone</span><input type="text" id="s-timezone" placeholder="America/New_York"></label>
+        <label class="field"><span>Target firms (comma separated)</span>
+          <textarea id="s-target_firms" rows="2" style="font-family:var(--sans);font-size:13px"></textarea></label>
+        <div class="row">
+          <button class="btn primary" id="btn-save-settings">Save</button>
+          <span class="small muted">Signature preview updates below.</span>
+        </div>
+        <div class="slotline" id="sig-preview" style="margin-top:12px;white-space:pre-wrap"></div>
+      </div>
+
+      <div class="card" style="margin-bottom:18px">
+        <h3>Follow-up policy</h3>
+        <div class="grid-3">
+          <label class="field"><span>Nudge after (days)</span><input type="number" id="s-followup_after_days" min="1"></label>
+          <label class="field"><span>Max nudges</span><input type="number" id="s-max_followups" min="1" max="5"></label>
+          <label class="field"><span>Thank-you within (hours)</span><input type="number" id="s-thankyou_within_hours" min="1"></label>
+        </div>
+        <button class="btn" id="btn-save-policy">Save policy</button>
+      </div>
+
+      <div class="card">
+        <h3>Connections</h3>
+        <p class="small muted" style="margin-top:0">Nothing leaves this Mac. The app
+          talks to Calendar and Outlook through macOS scripting, so the first use
+          of each triggers a permission prompt.</p>
+        <div class="row" style="margin-bottom:10px">
+          <button class="btn" id="btn-test-calendar">Test Apple Calendar</button>
+          <button class="btn" id="btn-test-outlook">Test Outlook</button>
+          <button class="btn" id="btn-sync-outlook">Scan Outlook mail</button>
+        </div>
+        <div id="conn-result"></div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- ------------------------------------------------------------ drawer -->
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer">
+  <div class="drawer-head row between">
+    <div><h3 id="d-name" style="margin:0">—</h3><div class="small muted" id="d-sub"></div></div>
+    <button class="btn ghost" id="d-close">✕</button>
+  </div>
+  <div class="drawer-body" id="drawer-body"></div>
+</aside>
+
+<!-- ------------------------------------------------------------- modal -->
+<div class="modal" id="modal">
+  <div class="modal-panel">
+    <div class="row between" style="margin-bottom:10px">
+      <h3 id="m-title" style="margin:0">Draft</h3>
+      <button class="btn ghost" id="m-close">✕</button>
+    </div>
+    <div id="m-body"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="/app.js"></script>
+</body>
+</html>

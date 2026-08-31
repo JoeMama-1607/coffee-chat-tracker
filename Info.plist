@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>Coffee Chat Tracker</string>
+	<key>CFBundleDisplayName</key>
+	<string>Coffee Chat Tracker</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.goizueta.coffeechattracker</string>
+	<key>CFBundleExecutable</key>
+	<string>CoffeeChatTracker</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1.0</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>12.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSCalendarsUsageDescription</key>
+	<string>Coffee Chat Tracker reads your calendar so it can propose coffee chat times that do not clash with anything you have already committed to.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Coffee Chat Tracker reads your calendar so it can propose coffee chat times that do not clash with anything you have already committed to, and adds a chat to your calendar when you ask it to.</string>
+	<key>NSCalendarsWriteOnlyAccessUsageDescription</key>
+	<string>Coffee Chat Tracker adds a confirmed coffee chat to your calendar when you click Add to Apple Calendar.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Coffee Chat Tracker asks Outlook to open pre-filled email drafts for you to review, and reads message dates to work out who has replied. It also reads the LinkedIn profile tab you already have open in Safari or Chrome, when you click Fetch. It never sends anything and never browses on its own.</string>
+</dict>
+</plist>
