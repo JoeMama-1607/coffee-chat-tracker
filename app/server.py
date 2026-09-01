@@ -31,7 +31,14 @@ WEB_DIR = os.path.join(HERE, "web")
 TOKEN = secrets.token_urlsafe(24)
 
 _outlook_status = {"checked": False}
+_calendar_status = {"checked": False}
 _lock = threading.Lock()
+
+# A chat stops being "coming up" shortly before it starts and stops being "now"
+# once it has plainly run its course. Nothing else can tell the app the meeting
+# happened — Outlook cannot see a Zoom call — so the clock is what moves it on.
+CHAT_LEAD_MINUTES = 15
+CHAT_RUN_MINUTES = 30
 
 # The app quits when its window goes away. The reliable signal is the explicit
 # goodbye the page sends on close (/api/close); the heartbeat is only a backstop
@@ -180,24 +187,63 @@ def firm_coverage(people, settings):
     return rows
 
 
-def upcoming_chats(people, settings):
+def roll_finished_chats(people, settings):
+    """A scheduled chat whose slot has come and gone is a chat you have had.
+
+    Without this a meeting sits in 'Chat scheduled' forever, which quietly
+    breaks everything downstream: firm coverage never counts it as spoken, and
+    the person keeps appearing under what is coming up.
+    """
     tz = availability.get_tz(settings.get("timezone", "America/New_York"))
     now = dt.datetime.now(tz)
-    rows = []
+    moved = []
+    for p in people:
+        if p.get("status") != "scheduled":
+            continue
+        when = iso_date(p.get("chat_at"))
+        if not when:
+            continue
+        when = when.replace(tzinfo=tz) if not when.tzinfo else when.astimezone(tz)
+        if now >= when + dt.timedelta(minutes=CHAT_RUN_MINUTES):
+            db.update_person(p["id"], {"status": "chat_done"})
+            moved.append(p["id"])
+    return moved
+
+
+def chat_buckets(people, settings):
+    """Split every dated chat into what is coming, what is happening, and what
+    has been and gone."""
+    tz = availability.get_tz(settings.get("timezone", "America/New_York"))
+    now = dt.datetime.now(tz)
+    lead = dt.timedelta(minutes=CHAT_LEAD_MINUTES)
+    run = dt.timedelta(minutes=CHAT_RUN_MINUTES)
+
+    buckets = {"current": [], "upcoming": [], "expired": []}
     for p in people:
         when = iso_date(p.get("chat_at"))
         if not when:
             continue
         when = when.replace(tzinfo=tz) if not when.tzinfo else when.astimezone(tz)
-        if when >= now - dt.timedelta(hours=2):
-            rows.append({
-                "person_id": p["id"], "name": p.get("name"), "firm": p.get("firm"),
-                "role": p.get("role"), "when": when.isoformat(),
-                "when_label": when.strftime("%a %b %d, %-I:%M %p") if os.name != "nt"
-                              else when.strftime("%a %b %d, %I:%M %p"),
-            })
-    rows.sort(key=lambda r: r["when"])
-    return rows
+        fmt = "%a %b %d, %-I:%M %p" if os.name != "nt" else "%a %b %d, %I:%M %p"
+        row = {
+            "person_id": p["id"], "name": p.get("name"), "firm": p.get("firm"),
+            "role": p.get("role"), "when": when.isoformat(),
+            "when_label": when.strftime(fmt),
+            "minutes_away": int((when - now).total_seconds() // 60),
+            "thankyou_sent": bool(p.get("thankyou_sent_at")),
+        }
+        if now < when - lead:
+            buckets["upcoming"].append(row)
+        elif now < when + run:
+            buckets["current"].append(row)
+        else:
+            buckets["expired"].append(row)
+
+    buckets["current"].sort(key=lambda r: r["when"])
+    buckets["upcoming"].sort(key=lambda r: r["when"])
+    buckets["expired"].sort(key=lambda r: r["when"], reverse=True)
+    buckets["expired"] = buckets["expired"][:12]
+    return buckets
 
 
 def build_slots(settings, refresh_days=None):
@@ -254,18 +300,40 @@ def sync_outlook(settings):
     }
 
 
+def probe_connections():
+    """Check Calendar and Outlook once, in the background, at startup — so the
+    app knows what it can do before you ask it to do it."""
+    global _outlook_status, _calendar_status
+    try:
+        status = macos.detect_outlook()
+    except Exception as exc:
+        status = {"flavor": "error", "detail": "%s: %s" % (type(exc).__name__, exc)}
+    status["checked"] = True
+    _outlook_status = status
+
+    try:
+        calendar = macos.detect_calendar()
+    except Exception as exc:
+        calendar = {"ok": False, "error": "%s: %s" % (type(exc).__name__, exc)}
+    calendar["checked"] = True
+    _calendar_status = calendar
+
+
 def state_payload():
     settings = db.get_settings()
     people = db.list_people()
+    if roll_finished_chats(people, settings):
+        people = db.list_people()   # re-read so everything below sees the move
     return {
         "settings": settings,
         "people": people,
         "statuses": [{"key": k, "label": l} for k, l in db.STATUSES],
         "actions": compute_actions(people, settings),
         "coverage": firm_coverage(people, settings),
-        "upcoming": upcoming_chats(people, settings),
+        "chats": chat_buckets(people, settings),
         "questions": templates.QUESTION_BANK,
         "outlook": _outlook_status,
+        "calendar": _calendar_status,
         "platform": {"is_mac": macos.IS_MAC, "demo": macos.DEMO},
     }
 
@@ -473,6 +541,15 @@ class Handler(BaseHTTPRequestHandler):
             _outlook_status["checked"] = True
             return self._json({"ok": True, "outlook": _outlook_status})
 
+        if path == "/api/detect-calendar":
+            global _calendar_status
+            try:
+                _calendar_status = macos.detect_calendar()
+            except macos.BridgeError as exc:
+                _calendar_status = {"ok": False, "error": str(exc)}
+            _calendar_status["checked"] = True
+            return self._json({"ok": True, "calendar": _calendar_status})
+
         if path == "/api/calendar-event":
             result = macos.create_calendar_event(
                 body.get("title", "Coffee chat"), body.get("start"), body.get("end"),
@@ -572,6 +649,11 @@ def main():
     print("CCT_URL=%s" % url, flush=True)
     if args.print_url:
         return
+
+    # Find out what Calendar and Outlook can do without being asked twice. In
+    # the background: the first calendar read can sit behind a permission
+    # prompt, and the window should be up and usable while that happens.
+    threading.Thread(target=probe_connections, daemon=True).start()
 
     if not args.no_watchdog:
         _last_beat[0] = time.time()

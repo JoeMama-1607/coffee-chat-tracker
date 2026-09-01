@@ -130,8 +130,32 @@ DEFAULT_SETTINGS = {
     "followup_after_days": "7",
     "max_followups": "3",
     "thankyou_within_hours": "24",
-    "target_firms": "McKinsey & Company, Bain & Company, BCG, Deloitte, EY-Parthenon, Kearney, Strategy&, Accenture, PwC, Simon-Kucher",
+    "target_firms": "McKinsey, Bain, BCG, Deloitte, EY, Kearney, Strategy&, Accenture, PwC, Simon-Kucher",
 }
+
+# Firms get written down half a dozen ways ("Bain", "Bain & Company", "Bain and
+# Company") and each spelling used to open its own row in Firm coverage, which
+# split one firm's progress across two bars. One short name per firm wins.
+FIRM_ALIASES = {
+    "bain & company": "Bain",
+    "bain and company": "Bain",
+    "bain & co": "Bain",
+    "bain & co.": "Bain",
+    "mckinsey & company": "McKinsey",
+    "mckinsey and company": "McKinsey",
+    "mckinsey & co": "McKinsey",
+    "mckinsey & co.": "McKinsey",
+    "ey-parthenon": "EY",
+    "ey parthenon": "EY",
+    "ernst & young": "EY",
+    "ernst and young": "EY",
+    "boston consulting group": "BCG",
+    "the boston consulting group": "BCG",
+}
+
+
+def canonical_firm(name):
+    return FIRM_ALIASES.get((name or "").strip().lower(), (name or "").strip())
 
 
 def connect():
@@ -202,12 +226,30 @@ MIGRATIONS = [
 ]
 
 
+OLD_TARGET_FIRMS = ("McKinsey & Company, Bain & Company, BCG, Deloitte, "
+                    "EY-Parthenon, Kearney, Strategy&, Accenture, PwC, Simon-Kucher")
+
+
 def migrate(conn):
     for table, column, decl in MIGRATIONS:
         existing = {r["name"] for r in conn.execute(
             "PRAGMA table_info(%s)" % table).fetchall()}
         if column not in existing:
             conn.execute("ALTER TABLE %s ADD COLUMN %s %s" % (table, column, decl))
+
+    # Fold the long firm spellings into the short ones, once, in place.
+    for row in conn.execute(
+            "SELECT DISTINCT firm FROM person WHERE firm <> ''").fetchall():
+        short = canonical_firm(row["firm"])
+        if short != row["firm"]:
+            conn.execute("UPDATE person SET firm=? WHERE firm=?", (short, row["firm"]))
+
+    # An untouched target list follows the rename; an edited one is left alone.
+    current = conn.execute(
+        "SELECT value FROM setting WHERE key='target_firms'").fetchone()
+    if current and current["value"].strip() == OLD_TARGET_FIRMS:
+        conn.execute("UPDATE setting SET value=? WHERE key='target_firms'",
+                     (DEFAULT_SETTINGS["target_firms"],))
 
 
 def list_people(include_archived=False):
@@ -266,6 +308,9 @@ def get_person(pid):
 
 
 def create_person(data):
+    data = dict(data)
+    if data.get("firm"):
+        data["firm"] = canonical_firm(data["firm"])
     fields = [f for f in PERSON_FIELDS if f in data]
     if "name" not in fields:
         raise ValueError("name is required")
@@ -284,6 +329,9 @@ def create_person(data):
 
 
 def update_person(pid, data):
+    data = dict(data)
+    if data.get("firm"):
+        data["firm"] = canonical_firm(data["firm"])
     fields = [f for f in PERSON_FIELDS if f in data]
     if not fields:
         return get_person(pid)

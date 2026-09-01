@@ -118,6 +118,19 @@ def read_calendar(start, end):
     return payload
 
 
+def detect_calendar():
+    """A one-day read, purely to find out whether calendar access works. This
+    is what triggers the macOS permission prompt on a fresh install."""
+    now = dt.datetime.now(dt.timezone.utc)
+    payload = read_calendar(now, now + dt.timedelta(days=1))
+    return {
+        "ok": True,
+        "events": len(payload.get("events", [])),
+        "demo": payload.get("demo", False),
+        "note": payload.get("note", ""),
+    }
+
+
 def create_calendar_event(title, start_iso, end_iso, notes="", calendar_name=""):
     if DEMO:
         return {"ok": True, "calendar": "Demo", "demo": True}

@@ -3,7 +3,10 @@
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
-let STATE = { people: [], settings: {}, statuses: [], actions: [], coverage: [], upcoming: [], questions: [] };
+let STATE = {
+  people: [], settings: {}, statuses: [], actions: [], coverage: [], questions: [],
+  chats: { current: [], upcoming: [], expired: [] },
+};
 let SLOTS = null;          // last generated availability
 let CURRENT = null;        // person open in the drawer
 
@@ -128,10 +131,39 @@ async function refresh() {
   STATE = await api('/api/state');
   renderToday();
   renderPipeline();
+  renderConnections();
   fillSettings();
   renderPrep();
   updateNavCounts();
   if (CURRENT) openPerson(CURRENT.id, true);
+}
+
+/* The server checks both on startup, so these dots are usually already
+   answered by the time the window paints. */
+function renderConnections() {
+  const cal = STATE.calendar || {};
+  if (!cal.checked) {
+    setStatusDot('#status-cal', 'warn', 'Calendar — checking…');
+  } else if (cal.ok && cal.demo) {
+    setStatusDot('#status-cal', 'warn', 'Calendar: demo data');
+  } else if (cal.ok) {
+    setStatusDot('#status-cal', 'ok', 'Calendar connected');
+  } else {
+    setStatusDot('#status-cal', 'bad', 'Calendar blocked');
+  }
+
+  const out = STATE.outlook || {};
+  if (!out.checked) {
+    setStatusDot('#status-outlook', 'warn', 'Outlook — checking…');
+  } else if (out.flavor === 'classic') {
+    setStatusDot('#status-outlook', 'ok', 'Outlook connected');
+  } else if (out.flavor === 'demo') {
+    setStatusDot('#status-outlook', 'warn', 'Outlook: demo');
+  } else if (out.flavor === 'unscriptable') {
+    setStatusDot('#status-outlook', 'warn', 'Outlook limited');
+  } else {
+    setStatusDot('#status-outlook', 'bad', 'Outlook unavailable');
+  }
 }
 
 function updateNavCounts() {
@@ -179,7 +211,27 @@ function renderToday() {
     </div>`).join('')
     : `<div class="card empty"><div class="big">✓</div>Nothing overdue. Good place to be.</div>`;
 
-  $('#upcoming').innerHTML = STATE.upcoming.length ? STATE.upcoming.map(u => `
+  const chats = STATE.chats || { current: [], upcoming: [], expired: [] };
+
+  // Happening now — from 15 minutes before the start until 30 minutes after it.
+  $('#current-chat').innerHTML = chats.current.length ? chats.current.map(c => {
+    const away = c.minutes_away;
+    const when = away > 0 ? `starts in ${away} min`
+      : away === 0 ? 'starting now'
+      : `started ${Math.abs(away)} min ago`;
+    return `<div class="now-card">
+      <div class="now-label">Happening now</div>
+      <div class="now-who">${esc(c.name)}</div>
+      <div class="small muted">${esc([c.firm, c.role].filter(Boolean).join(' · '))}</div>
+      <div class="now-when">${esc(c.when_label)} — ${esc(when)}</div>
+      <div class="row" style="gap:6px;margin-top:10px">
+        <button class="btn gold sm" data-prep="${c.person_id}">Prep</button>
+        <button class="btn sm" data-open="${c.person_id}">Open</button>
+      </div>
+    </div>`;
+  }).join('') : '';
+
+  $('#upcoming').innerHTML = chats.upcoming.length ? chats.upcoming.map(u => `
     <div class="action">
       <div class="grow">
         <span class="who">${esc(u.name)}</span>
@@ -191,6 +243,22 @@ function renderToday() {
     </div>`).join('')
     : `<div class="card empty small">No chats on the calendar yet. Set a date on a
         person once they confirm.</div>`;
+
+  // Been and gone. The thank-you clock is the only thing still running here.
+  $('#expired-chats').innerHTML = chats.expired.length ? `
+    <h2>Expired chats</h2>
+    ${chats.expired.map(e => `
+      <div class="action${e.thankyou_sent ? '' : ' overdue'}">
+        <div class="grow">
+          <span class="who">${esc(e.name)}</span>
+          <span class="muted small">${e.firm ? ' · ' + esc(e.firm) : ''}</span>
+          <div class="detail">${esc(e.when_label)} — ${e.thankyou_sent
+            ? 'thank-you sent' : 'no thank-you note yet'}</div>
+        </div>
+        ${e.thankyou_sent ? '' :
+          `<button class="btn gold sm" data-draft="thankyou" data-id="${e.person_id}">Draft thank-you</button>`}
+        <button class="btn sm" data-open="${e.person_id}">Open</button>
+      </div>`).join('')}` : '';
 
   $('#coverage').innerHTML = STATE.coverage.length ? STATE.coverage.map(c => {
     const total = Math.max(c.total, 1);
@@ -400,6 +468,9 @@ async function saveField(field, value) {
     const res = await api('/api/person/' + CURRENT.id, 'POST', patch);
     CURRENT = res.person;
     markSaved();
+    if (field === 'status' && value === 'scheduled' && !res.person.chat_at) {
+      toast('Set the chat date below — the thank-you clock runs off it', true);
+    }
     STATE = await api('/api/state');
     renderToday();
     renderPipeline();
@@ -676,27 +747,105 @@ async function openPrep(personId) {
   }
 }
 
+function defaultChatTime() {
+  const when = new Date();
+  when.setDate(when.getDate() + 2);
+  when.setHours(12, 0, 0, 0);
+  const pad = n => String(n).padStart(2, '0');
+  return `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())}`
+       + `T${pad(when.getHours())}:${pad(when.getMinutes())}`;
+}
+
+/* Scheduling someone without writing down when is the one mistake that breaks
+   everything downstream — the thank-you clock, Today, and firm coverage all
+   run off this date — so it gets asked for at the moment the status changes. */
+function askChatDate(personId, name, existing) {
+  openModal('When is the chat?', `
+    <p class="small muted" style="margin-top:0">${esc(name)} just moved to
+      <strong>Chat scheduled</strong>. The thank-you clock, the Today page and firm
+      coverage all run off this date.</p>
+    <label class="field"><span>Chat date &amp; time</span>
+      <input type="datetime-local" id="sched-when" value="${esc(existing || defaultChatTime())}"></label>
+    <div class="row">
+      <button class="btn primary" id="sched-save">Save date</button>
+      <button class="btn ghost" id="sched-skip">Skip for now</button>
+      <span class="small faint">You can also set it in the panel behind this.</span>
+    </div>`);
+
+  $('#sched-save').onclick = async () => {
+    const when = $('#sched-when').value;
+    if (!when) return toast('Pick a date and time', true);
+    try {
+      await api('/api/person/' + personId, 'POST', { chat_at: when });
+      closeModal();
+      toast('Chat date saved');
+      await refresh();
+      if (CURRENT && CURRENT.id === personId) openPerson(personId, true);
+    } catch (e) { toast(e.message, true); }
+  };
+  $('#sched-skip').onclick = () => closeModal();
+}
+
 function openAddPerson() {
   openModal('Add person', `
     <div class="grid-2">
       <label class="field"><span>Name *</span><input type="text" id="n-name"></label>
       <label class="field"><span>Email</span><input type="email" id="n-email"></label>
-      <label class="field"><span>Firm</span><input type="text" id="n-firm"></label>
-      <label class="field"><span>Role</span><input type="text" id="n-role"></label>
+      <label class="field"><span>Firm</span><input type="text" id="n-firm" list="firm-list"></label>
+      <label class="field"><span>Role</span><input type="text" id="n-role" placeholder="Associate, Consultant, Partner…"></label>
+      <label class="field"><span>Office</span><input type="text" id="n-office" placeholder="Atlanta"></label>
+      <label class="field"><span>Grad year</span><input type="text" id="n-grad_year" placeholder="2024"></label>
     </div>
-    <label class="field"><span>How you found them</span><input type="text" id="n-source" placeholder="GCA board, LinkedIn, intro from…"></label>
+    <datalist id="firm-list">${(STATE.settings.target_firms || '').split(',')
+      .map(f => f.trim()).filter(Boolean)
+      .map(f => `<option value="${esc(f)}"></option>`).join('')}</datalist>
+
+    <label class="field"><span>LinkedIn</span><input type="text" id="n-linkedin"
+      placeholder="linkedin.com/in/…"></label>
+
+    <div class="grid-3">
+      <label class="field"><span>Goizueta alum</span>
+        <select id="n-is_alum">
+          <option value="0">No</option>
+          <option value="1">Yes</option>
+        </select></label>
+      <label class="field"><span>Tier</span>
+        <select id="n-tier"><option>A</option><option selected>B</option><option>C</option></select></label>
+      <label class="field"><span>Status</span>
+        <select id="n-status">${STATE.statuses.map(s =>
+          `<option value="${s.key}">${esc(s.label)}</option>`).join('')}</select></label>
+    </div>
+    <p class="small faint" style="margin:-2px 0 12px">A Goizueta alum gets a different
+      opening line in every draft — the app leads with the shared programme instead of
+      explaining who you are, which is the strongest opening you have.</p>
+
+    <label class="field"><span>How you found them</span><input type="text" id="n-source"
+      placeholder="GCA board, Goizueta alumni list, LinkedIn, intro from…"></label>
     <div class="row"><button class="btn primary" id="n-save">Add</button>
-      <span class="small faint">Start with second-years and recent grads.</span></div>`);
+      <span class="small faint">Start with second-years and recent grads — they say yes most.</span></div>`);
+
   $('#n-save').onclick = async () => {
     const name = $('#n-name').value.trim();
     if (!name) return toast('A name is required', true);
     const res = await api('/api/person', 'POST', {
-      name, email: $('#n-email').value.trim(), firm: $('#n-firm').value.trim(),
-      role: $('#n-role').value.trim(), source: $('#n-source').value.trim(),
+      name,
+      email: $('#n-email').value.trim(),
+      firm: $('#n-firm').value.trim(),
+      role: $('#n-role').value.trim(),
+      office: $('#n-office').value.trim(),
+      grad_year: $('#n-grad_year').value.trim(),
+      linkedin: $('#n-linkedin').value.trim(),
+      is_alum: parseInt($('#n-is_alum').value, 10),
+      tier: $('#n-tier').value,
+      status: $('#n-status').value,
+      source: $('#n-source').value.trim(),
     });
     closeModal();
     await refresh();
-    openPerson(res.person.id);
+    await openPerson(res.person.id);
+    if (res.person.status === 'scheduled') {
+      askChatDate(res.person.id, res.person.name, '');
+    }
   };
 }
 
@@ -865,6 +1014,55 @@ function setStatusDot(id, tone, text) {
   $(id).innerHTML = `<span class="dot ${tone}"></span>${esc(text)}`;
 }
 
+/* Both connection tests are reachable from the sidebar and from Settings, so
+   they report to whichever of the two is actually on screen. */
+function connReport(html) {
+  const box = $('#conn-result');
+  if (box) box.innerHTML = html;
+}
+
+async function testCalendar() {
+  setStatusDot('#status-cal', 'warn', 'Calendar — checking…');
+  connReport('<div class="banner info">Reading your calendar…</div>');
+  try {
+    const res = await api('/api/detect-calendar', 'POST', {});
+    const cal = res.calendar;
+    if (!cal.ok) throw new Error(cal.error || 'Calendar unavailable');
+    connReport(`<div class="banner info">Calendar reachable — ${cal.events}
+      event${cal.events === 1 ? '' : 's'} in the next 24 hours.${cal.demo ? ' (demo data)' : ''}</div>`);
+    setStatusDot('#status-cal', cal.demo ? 'warn' : 'ok',
+      cal.demo ? 'Calendar: demo data' : 'Calendar connected');
+    toast(cal.demo ? 'Calendar: demo data' : 'Calendar connected');
+  } catch (e) {
+    connReport(`<div class="banner bad">${esc(e.message)}</div>`);
+    setStatusDot('#status-cal', 'bad', 'Calendar blocked');
+    toast(e.message, true);
+  }
+}
+
+async function testOutlook() {
+  setStatusDot('#status-outlook', 'warn', 'Outlook — checking…');
+  connReport('<div class="banner info">Checking Outlook…</div>');
+  try {
+    const res = await api('/api/detect-outlook', 'POST', {});
+    const o = res.outlook;
+    const good = o.flavor === 'classic';
+    connReport(`<div class="banner ${good ? 'info' : 'warn'}">
+      <strong>${esc(o.flavor)}</strong> — ${esc(o.detail)}
+      ${o.flavor === 'unscriptable' ? `<br><br>The "new Outlook" has no scripting
+        support, so mail tracking is unavailable. Everything else works. To switch
+        back, open Outlook and turn off the <em>New Outlook</em> toggle at the top
+        right of the window.` : ''}</div>`);
+    setStatusDot('#status-outlook', good ? 'ok' : 'warn',
+      good ? 'Outlook connected' : 'Outlook limited');
+    toast(good ? 'Outlook connected' : 'Outlook limited — ' + o.flavor, !good);
+  } catch (e) {
+    connReport(`<div class="banner bad">${esc(e.message)}</div>`);
+    setStatusDot('#status-outlook', 'bad', 'Outlook blocked');
+    toast(e.message, true);
+  }
+}
+
 document.addEventListener('click', async (ev) => {
   const t = ev.target.closest('[data-view], [data-open], [data-prep], [data-pdf], [data-draft], [data-status], [data-day], [data-copy-q], [data-copy-text], [data-delnote], [data-goto], [data-tier]');
   if (!t) return;
@@ -902,13 +1100,21 @@ document.addEventListener('click', async (ev) => {
 });
 
 document.addEventListener('change', async (ev) => {
-  // Inline status change from the pipeline table
+  // Inline status change from the pipeline table. Moving someone along the
+  // pipeline almost always means something else needs saying too, so the
+  // profile opens rather than leaving you to hunt for it.
   const sel = ev.target.closest('[data-status]');
   if (sel) {
+    const personId = parseInt(sel.dataset.status, 10);
     try {
-      await api('/api/person/' + sel.dataset.status, 'POST', { status: sel.value });
+      const res = await api('/api/person/' + personId, 'POST', { status: sel.value });
       toast('Status updated');
-      return refresh();
+      await refresh();
+      await openPerson(personId);
+      if (sel.value === 'scheduled') {
+        askChatDate(personId, res.person.name, (res.person.chat_at || '').slice(0, 16));
+      }
+      return;
     } catch (e) { return toast(e.message, true); }
   }
 
@@ -991,41 +1197,8 @@ document.addEventListener('click', async (ev) => {
     } catch (e) { return toast(e.message, true); }
   }
 
-  if (id === 'btn-test-calendar') {
-    $('#conn-result').innerHTML = '<div class="banner info">Reading your calendar…</div>';
-    try {
-      const res = await api('/api/slots', 'POST', {});
-      $('#conn-result').innerHTML = `<div class="banner info">Read ${res.event_count}
-        events and found ${res.days.length} offerable day${res.days.length === 1 ? '' : 's'}.
-        ${res.demo ? ' (demo data)' : ''}</div>`;
-      setStatusDot('#status-cal', res.demo ? 'warn' : 'ok', res.demo ? 'Calendar: demo' : 'Calendar connected');
-    } catch (e) {
-      $('#conn-result').innerHTML = `<div class="banner bad">${esc(e.message)}</div>`;
-      setStatusDot('#status-cal', 'bad', 'Calendar blocked');
-    }
-    return;
-  }
-
-  if (id === 'btn-test-outlook') {
-    $('#conn-result').innerHTML = '<div class="banner info">Checking Outlook…</div>';
-    try {
-      const res = await api('/api/detect-outlook', 'POST', {});
-      const o = res.outlook;
-      const good = o.flavor === 'classic';
-      $('#conn-result').innerHTML = `<div class="banner ${good ? 'info' : 'warn'}">
-        <strong>${esc(o.flavor)}</strong> — ${esc(o.detail)}
-        ${o.flavor === 'unscriptable' ? `<br><br>The "new Outlook" has no scripting
-          support, so mail tracking is unavailable. Everything else works. To switch
-          back, open Outlook and turn off the <em>New Outlook</em> toggle at the top
-          right of the window.` : ''}</div>`;
-      setStatusDot('#status-outlook', good ? 'ok' : 'warn',
-        good ? 'Outlook connected' : 'Outlook limited');
-    } catch (e) {
-      $('#conn-result').innerHTML = `<div class="banner bad">${esc(e.message)}</div>`;
-      setStatusDot('#status-outlook', 'bad', 'Outlook blocked');
-    }
-    return;
-  }
+  if (id === 'btn-test-calendar' || id === 'btn-side-cal') return testCalendar();
+  if (id === 'btn-test-outlook' || id === 'btn-side-outlook') return testOutlook();
 
   if (id === 'btn-sync-outlook') {
     $('#conn-result').innerHTML = '<div class="banner info">Scanning your mailbox — this can take a minute…</div>';
