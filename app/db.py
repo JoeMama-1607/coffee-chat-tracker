@@ -53,6 +53,8 @@ CREATE TABLE IF NOT EXISTS person (
     next_action_date   TEXT,
     linkedin_raw       TEXT DEFAULT '',
     profile_updated_at TEXT,
+    offered_slots      TEXT DEFAULT '',
+    offered_slots_at   TEXT,
     archived      INTEGER DEFAULT 0,
     created_at    TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at    TEXT DEFAULT CURRENT_TIMESTAMP
@@ -118,7 +120,7 @@ DEFAULT_SETTINGS = {
     "max_window_minutes": "180",
     "outlook_lookback_days": "30",
     "buffer_minutes": "15",
-    "lead_days": "2",
+    "lead_days": "0",
     "horizon_days": "14",
     "slots_wanted": "3",
     "max_per_day": "2",
@@ -215,7 +217,8 @@ PERSON_FIELDS = [
     "is_alum", "tier", "source", "status", "priority_note", "referred_by",
     "first_contact_at", "last_outbound_at", "last_inbound_at", "chat_at",
     "thankyou_sent_at", "followups_sent", "next_action", "next_action_date",
-    "linkedin_raw", "profile_updated_at", "archived",
+    "linkedin_raw", "profile_updated_at", "offered_slots", "offered_slots_at",
+    "archived",
 ]
 
 # Columns added after the first release. Existing databases are upgraded in
@@ -223,6 +226,8 @@ PERSON_FIELDS = [
 MIGRATIONS = [
     ("person", "linkedin_raw", "TEXT DEFAULT ''"),
     ("person", "profile_updated_at", "TEXT"),
+    ("person", "offered_slots", "TEXT DEFAULT ''"),
+    ("person", "offered_slots_at", "TEXT"),
 ]
 
 
@@ -250,6 +255,12 @@ def migrate(conn):
     if current and current["value"].strip() == OLD_TARGET_FIRMS:
         conn.execute("UPDATE setting SET value=? WHERE key='target_firms'",
                      (DEFAULT_SETTINGS["target_firms"],))
+
+    # Slots used to start two days out. They now start today, on the same
+    # "only if you never changed it yourself" terms.
+    lead = conn.execute("SELECT value FROM setting WHERE key='lead_days'").fetchone()
+    if lead and lead["value"].strip() == "2":
+        conn.execute("UPDATE setting SET value='0' WHERE key='lead_days'")
 
 
 def list_people(include_archived=False):

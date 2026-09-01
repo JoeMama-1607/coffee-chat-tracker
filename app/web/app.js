@@ -358,6 +358,27 @@ async function openPerson(id, quiet = false) {
   const f = (id_, label, value, type = 'text') =>
     `<label class="field"><span>${label}</span><input type="${type}" data-f="${id_}" value="${esc(value || '')}"></label>`;
 
+  // What every draft for this person will offer, until it is picked again.
+  let saved = null;
+  try { saved = JSON.parse(person.offered_slots || 'null'); } catch (e) { saved = null; }
+  const savedLines = (saved && saved.lines) || [];
+  const stale = ((saved && saved.days) || [])
+    .filter(d => d.date && d.date < new Date().toISOString().slice(0, 10)).length;
+
+  const savedBlock = savedLines.length ? `
+    <div class="card" style="margin-bottom:16px;padding:12px 14px">
+      <div class="row between" style="margin-bottom:6px">
+        <strong style="font-size:13px">Slots offered to ${esc(person.name.split(' ')[0])}</strong>
+        <button class="btn ghost sm" id="d-clear-slots">Clear</button>
+      </div>
+      ${savedLines.map(l => `<div class="slotline">• ${esc(l)}</div>`).join('')}
+      ${stale ? `<div class="small" style="color:var(--warn);margin-top:6px">
+        ${stale} of these ${stale === 1 ? 'has' : 'have'} already passed — pick again
+        before the next draft.</div>` : ''}
+      <div class="small faint" style="margin-top:6px">Drafts use these, not fresh
+        availability${person.offered_slots_at ? ' · picked ' + dateLabel(person.offered_slots_at) : ''}.</div>
+    </div>` : '';
+
   $('#drawer-body').innerHTML = `
     <div class="row" style="margin-bottom:16px">
       <button class="btn primary sm" data-draft="outreach" data-id="${person.id}">Draft outreach</button>
@@ -366,6 +387,8 @@ async function openPerson(id, quiet = false) {
       <button class="btn sm" data-prep="${person.id}">Prep sheet${person.linkedin_raw ? ' ✓' : ''}</button>
       <button class="btn sm" data-slots="${person.id}">Suggest slots</button>
     </div>
+
+    ${savedBlock}
 
     <div class="grid-2">
       ${f('name', 'Name', person.name)}
@@ -826,9 +849,12 @@ function paintSuggestSlots(person, data, picked) {
     <h3 style="margin:16px 0 6px">What they'll see</h3>
     <div id="slot-preview"></div>
     <div class="row" style="margin-top:14px">
+      <button class="btn primary" id="slot-save">Save for ${esc(person.name.split(' ')[0])}</button>
       <button class="btn" id="slot-copy">Copy for email</button>
-      <button class="btn primary" id="slot-draft">Use in outreach draft</button>
+      <button class="btn" id="slot-draft">Use in outreach draft</button>
     </div>
+    <p class="small faint" style="margin:6px 0 0">Saved slots are what every outreach
+      and nudge draft for them will offer from now on, until you pick again.</p>
     <div class="row" style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
       <button class="btn gold" id="slot-ics">Download .ics holds</button>
       <span class="small faint" style="flex:1;min-width:220px">Blocks these windows in
@@ -855,19 +881,52 @@ function paintSuggestSlots(person, data, picked) {
     lines = preview();
   });
 
-  $('#slot-copy').onclick = async () => {
+  /* Anything you actually act on is worth remembering — otherwise the email
+     you write tomorrow offers different times than the holds already sitting
+     on your calendar. */
+  async function persist() {
+    if (!lines.length) return false;
+    try {
+      const res = await api('/api/offered-slots', 'POST', {
+        person_id: person.id, lines, days: pickedDays(data.days, picked),
+      });
+      if (CURRENT && CURRENT.id === person.id) CURRENT = res.person;
+      return true;
+    } catch (e) {
+      toast(e.message, true);
+      return false;
+    }
+  }
+
+  $('#slot-save').onclick = async (ev) => {
     if (!lines.length) return toast('Tick at least one window first', true);
-    toast(await copyText(lines.map(l => '• ' + l).join('\n'))
-      ? 'Slots copied' : 'Could not copy — select the text manually');
+    const btn = ev.currentTarget;
+    btn.disabled = true;
+    if (await persist()) {
+      toast(`${lines.length} day${lines.length === 1 ? '' : 's'} saved for ${person.name}`);
+      closeModal();
+      await refresh();
+    }
+    btn.disabled = false;
   };
 
-  $('#slot-draft').onclick = () => {
+  $('#slot-copy').onclick = async () => {
     if (!lines.length) return toast('Tick at least one window first', true);
+    await persist();
+    toast(await copyText(lines.map(l => '• ' + l).join('\n'))
+      ? 'Slots copied and saved' : 'Could not copy — select the text manually');
+  };
+
+  $('#slot-draft').onclick = async () => {
+    if (!lines.length) return toast('Tick at least one window first', true);
+    await persist();
     openDraft(person.id, 'outreach', lines);
   };
 
-  $('#slot-ics').onclick = (ev) =>
+  $('#slot-ics').onclick = async (ev) => {
+    await persist();
     downloadIcs(pickedDays(data.days, picked), person.name, ev.currentTarget);
+  };
 }
 
 function defaultChatTime() {
@@ -1300,6 +1359,15 @@ document.addEventListener('click', async (ev) => {
       notes: `Role: ${CURRENT.role || ''}\nEmail: ${CURRENT.email || ''}\n\nAgenda: intros, resume walk, Q&A.`,
     });
     return toast(res.ok ? 'Added to Apple Calendar' : (res.error || 'Failed'), !res.ok);
+  }
+
+  if (id === 'd-clear-slots') {
+    if (!CURRENT) return;
+    try {
+      await api('/api/offered-slots', 'POST', { person_id: CURRENT.id, clear: true });
+      toast('Cleared — drafts will work out fresh availability again');
+      return refresh();
+    } catch (e) { return toast(e.message, true); }
   }
 
   if (id === 'note-add') {

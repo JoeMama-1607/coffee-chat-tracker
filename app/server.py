@@ -187,6 +187,33 @@ def firm_coverage(people, settings):
     return rows
 
 
+def stored_slot_lines(person, today=None):
+    """The windows picked for this person, minus any whose day has passed.
+
+    Returns None when there is nothing usable, so the caller can fall back to
+    working out fresh availability.
+    """
+    raw = (person.get("offered_slots") or "").strip()
+    if not raw:
+        return None
+    try:
+        saved = json.loads(raw)
+    except ValueError:
+        return None
+
+    lines = saved.get("lines") or []
+    days = saved.get("days") or []
+    if not lines:
+        return None
+    if not days or len(days) != len(lines):
+        return lines          # nothing to date-check against
+
+    today = today or dt.date.today()
+    fresh = [line for day, line in zip(days, lines)
+             if (iso_date(day.get("date")) or dt.datetime.max).date() >= today]
+    return fresh or None
+
+
 def roll_finished_chats(people, settings):
     """A scheduled chat whose slot has come and gone is a chat you have had.
 
@@ -513,6 +540,26 @@ class Handler(BaseHTTPRequestHandler):
                               "text/calendar; charset=utf-8",
                               "Coffee chat holds.ics")
 
+        if path == "/api/offered-slots":
+            # What you picked for one person, kept so the draft you write
+            # tomorrow offers the same times you offered today.
+            person = db.get_person(int(body["person_id"]))
+            if not person:
+                return self._error("person not found", 404)
+            if body.get("clear"):
+                person = db.update_person(person["id"],
+                                          {"offered_slots": "", "offered_slots_at": None})
+                return self._json({"ok": True, "person": person})
+            payload = json.dumps({
+                "lines": body.get("lines") or [],
+                "days": body.get("days") or [],
+            })
+            stamp = dt.datetime.now(
+                availability.get_tz(settings.get("timezone"))).isoformat()
+            person = db.update_person(person["id"], {
+                "offered_slots": payload, "offered_slots_at": stamp})
+            return self._json({"ok": True, "person": person})
+
         if path == "/api/prep":
             sheet = self._prep(body, settings)
             if sheet is None:
@@ -590,7 +637,12 @@ class Handler(BaseHTTPRequestHandler):
         kind = body.get("kind", "outreach")
         lines = body.get("slot_lines")
         if lines is None and kind in ("outreach", "followup"):
-            lines = build_slots(settings).get("lines", [])
+            # Times you actually picked for this person beat a fresh guess —
+            # otherwise the email offers different slots than the calendar
+            # holds you already put down for them.
+            lines = stored_slot_lines(person)
+            if lines is None:
+                lines = build_slots(settings).get("lines", [])
 
         if kind == "thankyou":
             draft = templates.thankyou(person, settings, body.get("highlights", ""))

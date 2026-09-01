@@ -7,6 +7,7 @@ returns the widest remaining windows, grouped by day.
 """
 
 import datetime as dt
+import itertools
 
 try:
     from zoneinfo import ZoneInfo
@@ -84,6 +85,103 @@ def tidy_window(start, end, min_window, max_window):
     return (start, end)
 
 
+# Offering the same hour three days running reads like a script, and if that
+# hour happens to be bad for them every option fails at once. So the day is
+# split into three named parts and the picks lean away from whichever parts
+# have already been offered.
+BUCKETS = ("morning", "midday", "afternoon")
+
+
+def _bucket(moment):
+    hour = moment.hour + moment.minute / 60.0
+    if hour < 12:
+        return "morning"
+    if hour < 15:
+        return "midday"
+    return "afternoon"
+
+
+STRIDE = dt.timedelta(hours=1)
+
+
+def split_window(start, end, min_window, max_window):
+    """Every offerable window inside one free gap, an hour apart.
+
+    A free 9–6 is not one 9–12 with the rest thrown away; it is a morning, a
+    midday and an afternoon to choose between. Sliding by the hour rather than
+    tiling means two different days can offer genuinely different times out of
+    identically empty calendars.
+    """
+    out = []
+    cursor = start
+    while cursor + min_window <= end:
+        out.append((cursor, min(cursor + max_window, end)))
+        cursor += STRIDE
+    tail = max(start, end - max_window)
+    if end - tail >= min_window and (tail, end) not in out:
+        out.append((tail, end))
+    return out
+
+
+SEPARATION = dt.timedelta(hours=1)
+
+
+def _gap_between(a, b):
+    if a[1] <= b[0]:
+        return b[0] - a[1]
+    if b[1] <= a[0]:
+        return a[0] - b[1]
+    return None                 # they overlap
+
+
+def pick_spread(candidates, max_per_day, spread):
+    """Choose one day's windows.
+
+    Judged as a set rather than one at a time, because the two best windows
+    individually are usually the two halves of the same long afternoon. In
+    order: no two touching (10–1 *or* 1–4 is one block written twice, not a
+    choice), then lean away from whichever part of the day has already been
+    offered on other days, then prefer longer.
+    """
+    fallback = None
+    for take in range(min(max_per_day, len(candidates)), 0, -1):
+        best, best_key = None, None
+        for combo in itertools.combinations(sorted(candidates), take):
+            gaps = [_gap_between(a, b) for a, b in itertools.combinations(combo, 2)]
+            if any(gap is None for gap in gaps):
+                continue        # overlapping windows are not two offers
+            touching = sum(1 for gap in gaps if gap < SEPARATION)
+
+            local = {}
+            bucket_cost = 0
+            for start, _end in combo:
+                name = _bucket(start)
+                bucket_cost += spread[name] + local.get(name, 0)
+                local[name] = local.get(name, 0) + 1
+
+            length = sum((end - start).total_seconds() for start, end in combo)
+            key = (touching, bucket_cost, -length, tuple(s for s, _ in combo))
+            if best_key is None or key < best_key:
+                best, best_key = combo, key
+
+        if best is None:
+            continue
+        if fallback is None:
+            fallback = best
+        # A day with one long gap can only offer two windows by butting them
+        # together, and "2–5 or 5–6" is worse than simply "2–5". Drop to fewer
+        # windows rather than pretend that is a choice.
+        if best_key[0] == 0:
+            fallback = best
+            break
+
+    if fallback is None:
+        return []
+    for start, _end in fallback:
+        spread[_bucket(start)] += 1
+    return sorted(fallback)
+
+
 def _merge(intervals):
     """Merge overlapping (start, end) pairs."""
     merged = []
@@ -155,6 +253,7 @@ def find_windows(events, rules, now=None):
 
     busy = busy_intervals(events, tz, rules)
     earliest = now + dt.timedelta(days=lead_days)
+    spread = dict.fromkeys(BUCKETS, 0)
 
     days = []
     cursor = now.date()
@@ -189,14 +288,19 @@ def find_windows(events, rules, now=None):
                     carved.append((max(b_end, f_start), f_end))
             free = carved
 
-        windows = [(s, e) for s, e in free if e - s >= min_window]
-        if not windows:
+        # Every free gap, cut into offerable pieces and tidied to quarter
+        # hours, so the choice below is made over the windows as they would
+        # actually be offered.
+        candidates = []
+        for f_start, f_end in free:
+            for piece_start, piece_end in split_window(f_start, f_end, min_window, max_window):
+                tidied = tidy_window(piece_start, piece_end, min_window, max_window)
+                if tidied:
+                    candidates.append(tidied)
+        if not candidates:
             continue
-        # Prefer the longest windows, then present them in time order.
-        windows.sort(key=lambda w: (w[1] - w[0]), reverse=True)
-        windows = sorted(windows[:max_per_day])
-        windows = [w for w in (tidy_window(s, e, min_window, max_window)
-                               for s, e in windows) if w]
+
+        windows = pick_spread(candidates, max_per_day, spread)
         if not windows:
             continue
 
