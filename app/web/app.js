@@ -364,6 +364,7 @@ async function openPerson(id, quiet = false) {
       <button class="btn sm" data-draft="followup" data-id="${person.id}">Draft nudge</button>
       <button class="btn gold sm" data-draft="thankyou" data-id="${person.id}">Draft thank-you</button>
       <button class="btn sm" data-prep="${person.id}">Prep sheet${person.linkedin_raw ? ' ✓' : ''}</button>
+      <button class="btn sm" data-slots="${person.id}">Suggest slots</button>
     </div>
 
     <div class="grid-2">
@@ -490,7 +491,9 @@ function openModal(title, html) {
 }
 function closeModal() { $('#modal').classList.remove('open'); }
 
-async function openDraft(personId, kind) {
+/* `slotLines`, when given, comes from the per-person picker — the draft then
+   offers exactly the windows that were ticked, rather than re-deriving them. */
+async function openDraft(personId, kind, slotLines) {
   const labels = { outreach: 'Outreach email', followup: 'Follow-up nudge', thankyou: 'Thank-you note' };
   openModal(labels[kind] || 'Draft', '<div class="empty small">Building the draft…</div>');
 
@@ -500,9 +503,12 @@ async function openDraft(personId, kind) {
     highlights = person.notes.filter(n => n.kind === 'takeaway').map(n => n.body).join(' ');
   }
 
+  const payload = { person_id: personId, kind, highlights };
+  if (slotLines) payload.slot_lines = slotLines;
+
   let draft;
   try {
-    draft = await api('/api/draft', 'POST', { person_id: personId, kind, highlights });
+    draft = await api('/api/draft', 'POST', payload);
   } catch (e) { closeModal(); return toast(e.message, true); }
 
   const gapNote = draft.unfilled && draft.unfilled.length
@@ -747,6 +753,123 @@ async function openPrep(personId) {
   }
 }
 
+/* ------------------------------------------------- per-person slot picker */
+
+/* Same wording the server's format_slot_lines produces, recomputed here
+   because unticking a window has to change the email text immediately. */
+function slotLinesFor(days, tzLabel) {
+  return days.filter(d => d.windows.length).map(d =>
+    `${d.label}: ${d.windows.map(w => w.text).join(' or ')} ${tzLabel}`.trim());
+}
+
+function pickedDays(days, picked) {
+  return days
+    .map((day, di) => ({
+      ...day,
+      windows: day.windows.filter((w, wi) => picked.has(`${di}:${wi}`)),
+    }))
+    .filter(day => day.windows.length);
+}
+
+async function openSuggestSlots(personId) {
+  const person = (CURRENT && CURRENT.id === personId)
+    ? CURRENT : await api('/api/person/' + personId);
+
+  openModal('Suggest slots — ' + person.name,
+    '<div class="empty small">Reading your calendar…</div>');
+
+  let data;
+  try {
+    data = await api('/api/slots', 'POST', {});
+  } catch (e) {
+    closeModal();
+    return toast(e.message, true);
+  }
+
+  if (!data.days.length) {
+    $('#m-body').innerHTML = `<div class="card empty">No windows fit your current rules.
+      Widen your working hours, shorten the minimum window, or look further ahead on
+      the <a href="#" data-goto="slots">Slots</a> tab.</div>`;
+    return;
+  }
+
+  // Everything the finder offered starts ticked; unticking is the edit.
+  const picked = new Set();
+  data.days.forEach((day, di) => day.windows.forEach((w, wi) => picked.add(`${di}:${wi}`)));
+  paintSuggestSlots(person, data, picked);
+}
+
+function paintSuggestSlots(person, data, picked) {
+  const tzLabel = STATE.settings.tz_label || '';
+  const banner = data.demo
+    ? `<div class="banner warn">Demo calendar — these windows are simulated.</div>`
+    : data.note ? `<div class="banner info">${esc(data.note)}</div>` : '';
+
+  const list = data.days.map((day, di) => `
+    <div class="slot-day">
+      <div class="slot-day-label">${esc(day.label)}</div>
+      ${day.windows.map((w, wi) => `
+        <label class="slot-pick">
+          <input type="checkbox" data-pick="${di}:${wi}"
+                 ${picked.has(`${di}:${wi}`) ? 'checked' : ''}>
+          <span>${esc(w.text)} ${esc(tzLabel)}</span>
+          <span class="small faint">${w.minutes} min</span>
+        </label>`).join('')}
+    </div>`).join('');
+
+  $('#m-body').innerHTML = `
+    ${banner}
+    <p class="small muted" style="margin-top:0">Conflict-free windows from your
+      calendar, ${data.event_count} event${data.event_count === 1 ? '' : 's'} considered.
+      Untick anything you'd rather not offer ${esc(person.name.split(' ')[0])}.</p>
+    ${list}
+    <h3 style="margin:16px 0 6px">What they'll see</h3>
+    <div id="slot-preview"></div>
+    <div class="row" style="margin-top:14px">
+      <button class="btn" id="slot-copy">Copy for email</button>
+      <button class="btn primary" id="slot-draft">Use in outreach draft</button>
+    </div>
+    <div class="row" style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
+      <button class="btn gold" id="slot-ics">Download .ics holds</button>
+      <span class="small faint" style="flex:1;min-width:220px">Blocks these windows in
+        Apple Calendar as <strong>busy</strong> holds under
+        ${esc(person.name)}'s name, so nothing else takes the time and the finder
+        won't offer it to anyone else. Delete them if the chat falls through.</span>
+    </div>`;
+
+  const preview = () => {
+    const chosen = pickedDays(data.days, picked);
+    const lines = slotLinesFor(chosen, tzLabel);
+    $('#slot-preview').innerHTML = lines.length
+      ? lines.map(l => `<div class="slotline">• ${esc(l)}</div>`).join('')
+      : `<div class="small faint">Nothing ticked — the draft would go out with no times in it.</div>`;
+    return lines;
+  };
+  let lines = preview();
+
+  $('#m-body').addEventListener('change', (ev) => {
+    const box = ev.target.closest('[data-pick]');
+    if (!box) return;
+    if (box.checked) picked.add(box.dataset.pick);
+    else picked.delete(box.dataset.pick);
+    lines = preview();
+  });
+
+  $('#slot-copy').onclick = async () => {
+    if (!lines.length) return toast('Tick at least one window first', true);
+    toast(await copyText(lines.map(l => '• ' + l).join('\n'))
+      ? 'Slots copied' : 'Could not copy — select the text manually');
+  };
+
+  $('#slot-draft').onclick = () => {
+    if (!lines.length) return toast('Tick at least one window first', true);
+    openDraft(person.id, 'outreach', lines);
+  };
+
+  $('#slot-ics').onclick = (ev) =>
+    downloadIcs(pickedDays(data.days, picked), person.name, ev.currentTarget);
+}
+
 function defaultChatTime() {
   const when = new Date();
   when.setDate(when.getDate() + 2);
@@ -938,11 +1061,17 @@ function renderSlots() {
   $('#btn-copy-slots').onclick = async () => {
     toast(await copyText(emailBlock) ? 'Slots copied' : 'Could not copy — select the text manually');
   };
-  $('#btn-ics').onclick = (ev) => downloadSlotsIcs(ev.currentTarget);
+  $('#btn-ics').onclick = (ev) => {
+    if (!SLOTS || !SLOTS.days.length) return toast('Find your availability first', true);
+    downloadIcs(SLOTS.days, ($('#slots-label').value || '').trim(), ev.currentTarget);
+  };
 }
 
-async function downloadSlotsIcs(button) {
-  if (!SLOTS || !SLOTS.days.length) return toast('Find your availability first', true);
+/* Shared by the Slots tab and the per-person picker, so a hold written from
+   either place is written the same way. */
+async function downloadIcs(days, holdLabel, button) {
+  const events = (days || []).reduce((n, d) => n + d.windows.length, 0);
+  if (!events) return toast('Pick at least one window first', true);
   const label = button.textContent;
   button.disabled = true;
   button.textContent = 'Building…';
@@ -950,7 +1079,7 @@ async function downloadSlotsIcs(button) {
     const res = await fetch('/api/slots.ics', {
       method: 'POST',
       headers: { 'X-CCT-Token': window.CCT_TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ days: SLOTS.days, label: ($('#slots-label').value || '').trim() }),
+      body: JSON.stringify({ days, label: holdLabel }),
     });
     if (!res.ok) {
       let message = 'Could not build the calendar file.';
@@ -968,7 +1097,6 @@ async function downloadSlotsIcs(button) {
     link.click();
     link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 10000);
-    const events = SLOTS.days.reduce((n, d) => n + d.windows.length, 0);
     toast(`${events} hold${events === 1 ? '' : 's'} saved — open the file to add them`);
   } catch (e) {
     toast(e.message, true);
@@ -1064,13 +1192,14 @@ async function testOutlook() {
 }
 
 document.addEventListener('click', async (ev) => {
-  const t = ev.target.closest('[data-view], [data-open], [data-prep], [data-pdf], [data-draft], [data-status], [data-day], [data-copy-q], [data-copy-text], [data-delnote], [data-goto], [data-tier]');
+  const t = ev.target.closest('[data-view], [data-open], [data-prep], [data-slots], [data-pdf], [data-draft], [data-status], [data-day], [data-copy-q], [data-copy-text], [data-delnote], [data-goto], [data-tier]');
   if (!t) return;
 
   if (t.dataset.view) return switchView(t.dataset.view);
-  if (t.dataset.goto) { ev.preventDefault(); return switchView(t.dataset.goto); }
+  if (t.dataset.goto) { ev.preventDefault(); closeModal(); return switchView(t.dataset.goto); }
   if (t.dataset.pdf) return downloadPrepPdf(parseInt(t.dataset.pdf, 10), t);
   if (t.dataset.prep) return openPrep(parseInt(t.dataset.prep, 10));
+  if (t.dataset.slots) return openSuggestSlots(parseInt(t.dataset.slots, 10));
   if (t.dataset.open) return openPerson(parseInt(t.dataset.open, 10));
   if (t.dataset.draft) return openDraft(parseInt(t.dataset.id, 10), t.dataset.draft);
   if (t.dataset.copyText !== undefined) {

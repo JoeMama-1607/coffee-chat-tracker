@@ -163,6 +163,23 @@ h3 { font-size: 15px; margin: 0 0 8px; font-weight: 620; }
 .now-card .now-who { font-weight: 660; font-size: 15px; }
 .now-card .now-when { font-size: 12.5px; color: var(--text); margin-top: 6px; font-weight: 550; }
 
+/* Picking which windows to offer one person. */
+.slot-day { margin-bottom: 10px; }
+.slot-day-label {
+  font-size: 12px; font-weight: 660; color: var(--text-muted);
+  margin-bottom: 4px;
+}
+.slot-pick {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 8px 12px; margin-bottom: 5px;
+  cursor: pointer; font-size: 13.5px;
+}
+.slot-pick:hover { border-color: var(--border-strong); }
+.slot-pick input { width: 15px; height: 15px; accent-color: var(--gold-600); }
+.slot-pick span:first-of-type { flex: 1; font-variant-numeric: tabular-nums; }
+.slot-pick:has(input:not(:checked)) { opacity: .5; }
+
 .action.overdue { border-left-color: var(--danger); }
 .action.today { border-left-color: var(--gold-500); }
 .action.low { border-left-color: var(--text-faint); }
