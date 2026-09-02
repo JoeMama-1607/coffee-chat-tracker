@@ -1,5 +1,11 @@
 .DS_Store
 __pycache__/
+
+# Personal data. LinkedIn exports and resumes belong on your Mac, not in a
+# repository — the app reads them from disk and stores the text in your own
+# database.
+*.pdf
+
 *.pyc
 *.sqlite3
 *.sqlite3-*

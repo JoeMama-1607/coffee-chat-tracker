@@ -391,6 +391,23 @@ def _pdf_header(lines):
     return name, " ".join(headline_parts).strip(), location
 
 
+def _looks_like_prose(line):
+    """A wrapped line of a role description, rather than a company or a title.
+
+    Profiles that spell out what each job involved wrap those sentences across
+    lines, and the last line of a paragraph sits directly above the next job
+    title — close enough to a company heading to be read as one. A sentence
+    continuing mid-thought starts in lower case; a finished one is long and
+    ends in a full stop. Neither is ever a company name.
+    """
+    text = (line or "").strip()
+    if not text:
+        return False
+    if text[0].islower():
+        return True
+    return len(text.split()) >= 5 and text.endswith((".", ";", ":"))
+
+
 def _pdf_experience(lines):
     """Company, then title, then dates — with a bare total duration marking a
     company that several roles hang off."""
@@ -420,7 +437,7 @@ def _pdf_experience(lines):
 
     while index < len(lines):
         line = lines[index].strip()
-        if not line or is_date(line) or is_duration(line):
+        if not line or is_date(line) or is_duration(line) or _looks_like_prose(line):
             index += 1
             continue
 
@@ -436,7 +453,7 @@ def _pdf_experience(lines):
             if index < len(lines) and _looks_like_place(lines[index]):
                 attach_location(lines[index])
                 index += 1
-        elif after and is_date(after):
+        elif after and is_date(after) and not _looks_like_prose(nxt):
             company = line
             add(nxt, after, company)
             index += 3
