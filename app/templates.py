@@ -15,10 +15,10 @@ The rules the wording follows came from feedback on a real outreach email:
     recruiting roadmap. "What you wish you'd known early on" gets the same
     information out of a conversation they enjoy having.
   * Dates without brackets, one time format throughout.
-  * "Best regards" for US professional outreach.
 
-No signature block is appended. Outlook adds your own, and two signatures in
-one message looks careless.
+Nothing is signed off. The body stops after its last line and leaves a blank
+one, so the signature Outlook adds — sign-off included — follows on cleanly.
+Two sign-offs in one message looks careless.
 
 The one thing this cannot do is have the insight for you. It assembles true,
 checkable sentences out of two profiles — read it before you send it.
@@ -30,9 +30,6 @@ import matching
 
 BRACKET = re.compile(r"\[[^\[\]]{3,400}?\]", re.S)
 
-SIGN_OFF = "Best regards,"
-
-
 def unfilled(text):
     """Every [prompt] still sitting in the draft."""
     return BRACKET.findall(text or "")
@@ -40,6 +37,12 @@ def unfilled(text):
 
 def first_name(full_name):
     return (full_name or "").strip().split(" ")[0] or "there"
+
+
+def _finish(paragraphs):
+    """Join the body and leave a trailing blank line. Outlook drops its own
+    signature straight in after it, sign-off and all."""
+    return "\n\n".join(p for p in paragraphs if p) + "\n\n"
 
 
 def _slot_block(slot_lines, tz_label=""):
@@ -268,9 +271,8 @@ def outreach(person, settings, slot_lines, mine=None, theirs=None):
     paragraphs.append(closing)
 
     paragraphs.append("Thank you for considering, and I look forward to connecting!")
-    paragraphs.append(SIGN_OFF)
 
-    body = "\n\n".join(paragraphs)
+    body = _finish(paragraphs)
     subject = "Goizueta MBA — coffee chat request"
     if settings.get("user_name"):
         subject = "Coffee chat request — %s, Goizueta MBA" % settings["user_name"].strip()
@@ -298,9 +300,8 @@ def followup(person, settings, slot_lines):
             "still love to hear about your experience — happy to work around "
             "your schedule.")
     paragraphs.append("Thanks again for considering it.")
-    paragraphs.append(SIGN_OFF)
 
-    body = "\n\n".join(paragraphs)
+    body = _finish(paragraphs)
     return {
         "subject": "Following up — Goizueta coffee chat request",
         "body": body,
@@ -328,9 +329,8 @@ def thankyou(person, settings, highlights=""):
         "If there is anyone else at %s whose path I should hear about, I would "
         "be glad to be introduced. Either way, I'll keep you posted on how "
         "recruiting goes, and I hope we can catch up again soon." % firm,
-        SIGN_OFF,
     ]
-    body = "\n\n".join(paragraphs)
+    body = _finish(paragraphs)
     return {
         "subject": "Thank you — %s" % (settings.get("user_name", "").strip() or "coffee chat"),
         "body": body,
