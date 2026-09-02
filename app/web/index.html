@@ -170,20 +170,15 @@
     <!-- ---------------------------------------------------- SETTINGS -->
     <section class="view" id="view-settings">
       <h1>Settings</h1>
-      <p class="lede">Your details fill the signature block and the resume
-        attachment on every draft.</p>
+      <p class="lede">Your profile is what the app compares against theirs to
+        work out what the two of you actually share. Drafts stop at
+        "Best regards," so your own Outlook signature follows on.</p>
 
       <div class="card" style="margin-bottom:18px">
         <h3>You</h3>
         <div class="grid-2">
           <label class="field"><span>Full name</span><input type="text" id="s-user_name"></label>
           <label class="field"><span>Email</span><input type="email" id="s-user_email"></label>
-        </div>
-        <label class="field"><span>Program line</span><input type="text" id="s-user_program"></label>
-        <label class="field"><span>School line</span><input type="text" id="s-user_school"></label>
-        <div class="grid-2">
-          <label class="field"><span>Phone</span><input type="text" id="s-user_phone"></label>
-          <label class="field"><span>LinkedIn</span><input type="text" id="s-user_linkedin"></label>
         </div>
         <label class="field"><span>Resume path (attached to every outreach draft)</span>
           <input type="text" id="s-resume_path" placeholder="/Users/you/Documents/Resume.pdf"></label>
@@ -192,9 +187,28 @@
           <textarea id="s-target_firms" rows="2" style="font-family:var(--sans);font-size:13px"></textarea></label>
         <div class="row">
           <button class="btn primary" id="btn-save-settings">Save</button>
-          <span class="small muted">Signature preview updates below.</span>
+          <span class="small muted">Drafts end at "Best regards," — your Outlook
+            signature follows on.</span>
         </div>
-        <div class="slotline" id="sig-preview" style="margin-top:12px;white-space:pre-wrap"></div>
+      </div>
+
+      <div class="card" style="margin-bottom:18px">
+        <h3>Your background</h3>
+        <p class="small muted" style="margin-top:0">Drafts are written by comparing
+          your profile against theirs, so this is what lets the app find something
+          real to open on. Being at Goizueta together is deliberately not used —
+          it is true of hundreds of people and says nothing.</p>
+        <div class="row" style="margin-bottom:10px">
+          <label class="btn gold sm" style="cursor:pointer;margin:0">
+            Upload your LinkedIn PDF
+            <input type="file" accept="application/pdf,.pdf" id="s-profile-pdf" style="display:none">
+          </label>
+          <span class="small faint" id="s-profile-note">On your own profile: More → Save to PDF.</span>
+        </div>
+        <label class="field"><span>One line on your pre-MBA background (used verbatim)</span>
+          <textarea id="s-user_pitch" rows="2" style="font-family:var(--sans);font-size:13px"
+            placeholder="Before business school, I was a software engineer at Flipkart, where I most recently led an 8-member development team."></textarea></label>
+        <button class="btn" id="btn-save-pitch">Save background</button>
       </div>
 
       <div class="card" style="margin-bottom:18px">

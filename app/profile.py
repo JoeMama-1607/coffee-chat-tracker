@@ -323,10 +323,205 @@ def _parse_education(lines):
     return education
 
 
+# ------------------------------------------------------- LinkedIn PDF export
+
+# The "Save to PDF" export is laid out differently from a copied web page: a
+# sidebar of contact details and skills comes first, the About section is
+# called Summary, and each position reads Company, then Title, then dates —
+# the opposite order to the web. It is also perfectly regular, so it is worth
+# reading on its own terms rather than through the web layout's guesswork.
+
+SIDEBAR_HEADERS = {
+    "contact", "top skills", "languages", "certifications", "patents",
+    "publications", "honors-awards", "honors & awards", "interests",
+}
+PAGE_FOOTER = re.compile(r"^page \d+ of \d+$", re.I)
+BARE_DURATION = re.compile(
+    r"^\d+\s*(?:yrs?|years?|mos?|months?)"
+    r"(?:\s+\d+\s*(?:yrs?|years?|mos?|months?))?$", re.I)
+NAME_LINE = re.compile(r"^[A-Z][^\s|@,]*(?:\s+[A-Z][^\s|@,]*){1,3}$")
+
+
+def looks_like_pdf_export(lines):
+    lowered = [l.strip().lower() for l in lines[:40]]
+    if not any(PAGE_FOOTER.match(l) for l in (x.strip().lower() for x in lines)):
+        if "contact" not in lowered[:3]:
+            return False
+    return "experience" in [l.strip().lower() for l in lines] or "summary" in lowered
+
+
+def _unwrap(lines):
+    """The export wraps mid-bracket — '· (June' / '2016 - November 2020)'."""
+    out = []
+    for line in lines:
+        if out and out[-1].count("(") > out[-1].count(")"):
+            out[-1] = out[-1].rstrip() + " " + line.strip()
+        else:
+            out.append(line)
+    return out
+
+
+def _pdf_header(lines):
+    """Name, headline and location sit between the sidebar and Summary."""
+    lowered = [l.strip().lower() for l in lines]
+    stop = len(lines)
+    for marker in ("summary", "experience", "education"):
+        if marker in lowered:
+            stop = min(stop, lowered.index(marker))
+    block = [l for l in lines[:stop] if l.strip()]
+    if not block:
+        return "", "", ""
+
+    location = ""
+    if _looks_like_place(block[-1]):
+        location = block[-1]
+        block = block[:-1]
+
+    # Walk back through the headline until something reads like a person.
+    name, headline_parts = "", []
+    for index in range(len(block) - 1, -1, -1):
+        candidate = block[index].strip()
+        if candidate.lower() in SIDEBAR_HEADERS:
+            break
+        if NAME_LINE.match(candidate) and not any(ch.isdigit() for ch in candidate):
+            name = candidate
+            break
+        headline_parts.insert(0, candidate)
+
+    return name, " ".join(headline_parts).strip(), location
+
+
+def _pdf_experience(lines):
+    """Company, then title, then dates — with a bare total duration marking a
+    company that several roles hang off."""
+    lines = [l for l in lines if not PAGE_FOOTER.match(l.strip())]
+    roles, company, index = [], "", 0
+
+    def is_date(text):
+        return bool(DATE_RANGE.match(text))
+
+    def is_duration(text):
+        return bool(BARE_DURATION.match(text.strip()))
+
+    def add(title, date_line, employer):
+        match = DATE_RANGE.match(date_line)
+        start = _parse_month_year(match.group("start"))
+        end = _parse_month_year(match.group("end"))
+        current = match.group("end").lower() in ("present", "current")
+        roles.append({
+            "title": title.strip(), "company": (employer or "").strip(),
+            "start": start, "end": end, "current": current,
+            "months": _months_between(start, end), "location": "",
+        })
+
+    def attach_location(text):
+        if roles:
+            roles[-1]["location"] = text.strip()
+
+    while index < len(lines):
+        line = lines[index].strip()
+        if not line or is_date(line) or is_duration(line):
+            index += 1
+            continue
+
+        nxt = lines[index + 1].strip() if index + 1 < len(lines) else ""
+        after = lines[index + 2].strip() if index + 2 < len(lines) else ""
+
+        if nxt and is_duration(nxt):
+            company = line                      # grouped employer heading
+            index += 2
+        elif nxt and is_date(nxt):
+            add(line, nxt, company)             # another role at the same place
+            index += 2
+            if index < len(lines) and _looks_like_place(lines[index]):
+                attach_location(lines[index])
+                index += 1
+        elif after and is_date(after):
+            company = line
+            add(nxt, after, company)
+            index += 3
+            if index < len(lines) and _looks_like_place(lines[index]):
+                attach_location(lines[index])
+                index += 1
+        else:
+            index += 1
+
+    roles.sort(key=lambda r: r["start"] or (0, 0), reverse=True)
+    return roles
+
+
+def _pdf_education(lines):
+    """Each qualification ends in a '·' line carrying the degree and dates."""
+    lines = _unwrap([l for l in lines if not PAGE_FOOTER.match(l.strip())])
+    education, school_parts = [], []
+    for line in lines:
+        if "·" not in line:
+            if line.strip():
+                school_parts.append(line.strip())
+            continue
+
+        detail, _, when = line.partition("·")
+        detail = detail.strip()
+        when = when.strip().strip("()")
+
+        # The school is the first line of the block; anything after it wrapped
+        # out of the qualification itself, so it counts towards the degree.
+        school = school_parts[0].strip() if school_parts else ""
+        degree_text = " ".join(school_parts[1:] + [detail]).strip()
+
+        degree = ""
+        for pattern, label in DEGREE_PATTERNS:
+            if re.search(pattern, degree_text.lower()):
+                degree = label
+                break
+        education.append({
+            "school": school,
+            "degree": degree,
+            "detail": degree_text or detail,
+            "years": when,
+        })
+        school_parts = []
+    return education
+
+
+def parse_pdf(lines):
+    sections = _split_sections(lines)
+    name, headline, location = _pdf_header(lines)
+    roles = _pdf_experience(sections.get("experience", []))
+    education = _pdf_education(sections.get("education", []))
+    about = " ".join(sections.get("summary", []))[:900]
+
+    # Top Skills is often the last sidebar block, so the name and headline run
+    # straight on from it. Cut the list where the person's name begins.
+    skills = []
+    for entry in sections.get("top skills", []):
+        if name and entry.strip() == name:
+            break
+        if entry.strip():
+            skills.append(entry.strip())
+    skills = skills[:8]
+
+    return {
+        "ok": bool(roles or education),
+        "name": name,
+        "headline": headline,
+        "location": location,
+        "roles": roles,
+        "education": education,
+        "about": about,
+        "skills": skills,
+        "source": "pdf",
+        "line_count": len(lines),
+    }
+
+
 def parse(text):
     lines = _clean_lines(text)
     if not lines:
         return {"ok": False, "reason": "empty"}
+
+    if looks_like_pdf_export(lines):
+        return parse_pdf(lines)
 
     sections = _split_sections(lines)
     header = [l for l in sections.get("_header", []) if not _looks_like_noise(l)]

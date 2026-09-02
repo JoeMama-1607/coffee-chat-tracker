@@ -5,6 +5,7 @@ Standard library only, so there is nothing to install.
 """
 
 import argparse
+import base64
 import datetime as dt
 import json
 import mimetypes
@@ -23,6 +24,8 @@ import availability  # noqa: E402
 import db  # noqa: E402
 import ics  # noqa: E402
 import macos  # noqa: E402
+import matching  # noqa: E402
+import pdfreader  # noqa: E402
 import pdfwriter  # noqa: E402
 import profile as profile_reader  # noqa: E402
 import templates  # noqa: E402
@@ -185,6 +188,38 @@ def firm_coverage(people, settings):
     rows.sort(key=lambda r: (r["total"] == 0, not r["is_target"],
                              -r["chatted"], -r["total"], r["firm"].lower()))
     return rows
+
+
+def _profile_summary(parsed):
+    """Just enough for the interface to say what it understood."""
+    if not parsed.get("ok"):
+        return {"ok": False}
+    return {
+        "ok": True,
+        "name": parsed.get("name", ""),
+        "headline": parsed.get("headline", ""),
+        "roles": len(parsed.get("roles") or []),
+        "education": len(parsed.get("education") or []),
+        "top_role": (parsed.get("roles") or [{}])[0].get("title", ""),
+        "top_company": (parsed.get("roles") or [{}])[0].get("company", ""),
+    }
+
+
+def my_profile(settings):
+    """Your own parsed profile, used to work out what you share with someone."""
+    raw = (settings.get("user_profile_raw") or "").strip()
+    if not raw:
+        return {}
+    parsed = profile_reader.parse(raw)
+    return parsed if parsed.get("ok") else {}
+
+
+def their_profile(person):
+    raw = (person.get("linkedin_raw") or "").strip()
+    if not raw:
+        return {}
+    parsed = profile_reader.parse(raw)
+    return parsed if parsed.get("ok") else {}
 
 
 def stored_slot_lines(person, today=None):
@@ -540,6 +575,43 @@ class Handler(BaseHTTPRequestHandler):
                               "text/calendar; charset=utf-8",
                               "Coffee chat holds.ics")
 
+        if path == "/api/profile-pdf":
+            # A LinkedIn "Save to PDF" export, for them or for you.
+            try:
+                blob = base64.b64decode(body.get("data") or "")
+            except Exception:
+                return self._error("That file could not be read.", 400)
+            if not pdfreader.looks_like_pdf(blob):
+                return self._error("That is not a PDF file.", 400)
+            try:
+                text = pdfreader.extract_text(blob)
+            except pdfreader.PdfError as exc:
+                return self._error(exc, 400)
+
+            parsed = profile_reader.parse(text)
+            stamp = dt.datetime.now(
+                availability.get_tz(settings.get("timezone"))).isoformat()
+
+            if body.get("self"):
+                db.save_settings({"user_profile_raw": text})
+                return self._json({"ok": True, "self": True, "text": text,
+                                   "parsed": _profile_summary(parsed)})
+
+            person = db.get_person(int(body["person_id"]))
+            if not person:
+                return self._error("person not found", 404)
+            patch = {"linkedin_raw": text, "profile_updated_at": stamp}
+            # The export carries facts the row may be missing.
+            if parsed.get("ok"):
+                current = (parsed.get("roles") or [{}])[0]
+                if not (person.get("firm") or "").strip() and current.get("company"):
+                    patch["firm"] = current["company"]
+                if not (person.get("role") or "").strip() and current.get("title"):
+                    patch["role"] = current["title"]
+            person = db.update_person(person["id"], patch)
+            return self._json({"ok": True, "person": person,
+                               "parsed": _profile_summary(parsed)})
+
         if path == "/api/offered-slots":
             # What you picked for one person, kept so the draft you write
             # tomorrow offers the same times you offered today.
@@ -649,7 +721,8 @@ class Handler(BaseHTTPRequestHandler):
         elif kind == "followup":
             draft = templates.followup(person, settings, lines or [])
         else:
-            draft = templates.outreach(person, settings, lines or [])
+            draft = templates.outreach(person, settings, lines or [],
+                                       my_profile(settings), their_profile(person))
 
         # An edited draft from the interface wins over the scaffold.
         subject = body.get("subject") or draft["subject"]

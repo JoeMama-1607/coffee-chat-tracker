@@ -76,6 +76,20 @@ function esc(text) {
     .replace(/"/g, '&quot;');
 }
 
+/* Files ride to the local server as base64 inside the usual JSON call, so
+   there is one request path and one place the token is checked. */
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || '');
+      resolve(result.slice(result.indexOf(',') + 1));
+    };
+    reader.onerror = () => reject(new Error('That file could not be read.'));
+    reader.readAsDataURL(file);
+  });
+}
+
 async function copyText(text) {
   try {
     await navigator.clipboard.writeText(text);
@@ -607,12 +621,21 @@ function renderPrepSheet(prep) {
 
   const pasteBox = `
     <details class="paste-box"${prep.has_profile ? '' : ' open'}>
-      <summary>${prep.has_profile ? 'Update the pasted profile' : 'Paste their LinkedIn profile'}</summary>
+      <summary>${prep.has_profile ? 'Update their profile' : 'Add their LinkedIn profile'}</summary>
       <p class="small muted" style="margin:10px 0">
-        LinkedIn requires a login and blocks automated access, so this app cannot
-        fetch it for you. Open ${link}, select the page (⌘A) and copy (⌘C), then
-        paste below. The Experience and Education sections are the parts that matter.
+        <strong>Easiest:</strong> open ${link}, click <em>More</em> → <em>Save to PDF</em>,
+        and drop the file here. The app reads the whole career out of it — no copying,
+        no pasting. Otherwise select the page (⌘A), copy (⌘C) and paste below.
+        Either way it stays on this Mac.
       </p>
+      <div class="row" style="margin-bottom:10px">
+        <label class="btn gold sm" style="cursor:pointer;margin:0">
+          Upload LinkedIn PDF
+          <input type="file" accept="application/pdf,.pdf" id="prep-pdf"
+                 data-person="${p.id}" style="display:none">
+        </label>
+        <span class="small faint" id="prep-pdf-note">More → Save to PDF, on their profile.</span>
+      </div>
       <textarea id="prep-raw" rows="7" placeholder="Paste the profile here…"></textarea>
       <button class="btn primary sm" id="prep-parse" data-id="${p.id}" style="margin-top:8px">
         ${prep.has_profile ? 'Re-read profile' : 'Build prep sheet'}</button>
@@ -744,6 +767,30 @@ function paintPrep(prep) {
   const personId = prep.person.id;
   $('#m-title').textContent = 'Prep — ' + prep.person.name;
   $('#m-body').innerHTML = renderPrepSheet(prep);
+
+  const pdfInput = $('#prep-pdf');
+  if (pdfInput) {
+    pdfInput.onchange = async () => {
+      const file = pdfInput.files && pdfInput.files[0];
+      if (!file) return;
+      const note = $('#prep-pdf-note');
+      note.textContent = `Reading ${file.name}…`;
+      try {
+        const res = await api('/api/profile-pdf', 'POST', {
+          person_id: personId, data: await fileToBase64(file),
+        });
+        toast(res.parsed.ok
+          ? `Read ${res.parsed.roles} roles from ${file.name}`
+          : 'The PDF was read but no work history was found', !res.parsed.ok);
+        const again = await api('/api/prep', 'POST', { person_id: personId });
+        paintPrep(again.prep);
+        await refresh();
+      } catch (e) {
+        note.textContent = e.message;
+        toast(e.message, true);
+      }
+    };
+  }
 
   const btn = $('#prep-parse');
   if (!btn) return;
@@ -1064,9 +1111,8 @@ const DAY_NAMES = [['1', 'Mon'], ['2', 'Tue'], ['3', 'Wed'], ['4', 'Thu'], ['5',
 function fillSettings() {
   const s = STATE.settings;
   const set = (id, key) => { const el = $(id); if (el) el.value = s[key] != null ? s[key] : ''; };
-  ['user_name', 'user_email', 'user_program', 'user_school', 'user_phone',
-   'user_linkedin', 'resume_path', 'timezone', 'target_firms',
-   'followup_after_days', 'max_followups', 'thankyou_within_hours']
+  ['user_name', 'user_email', 'user_pitch', 'resume_path', 'timezone',
+   'target_firms', 'followup_after_days', 'max_followups', 'thankyou_within_hours']
     .forEach(k => set('#s-' + k, k));
   ['work_start', 'work_end', 'tz_label', 'min_window_minutes', 'buffer_minutes',
    'lead_days', 'horizon_days', 'slots_wanted', 'max_per_day', 'excluded_calendars']
@@ -1076,10 +1122,12 @@ function fillSettings() {
   $('#r-work_days').innerHTML = DAY_NAMES.map(([n, label]) =>
     `<button class="btn sm ${active.has(n) ? 'primary' : ''}" data-day="${n}">${label}</button>`).join('');
 
-  const sig = [s.user_name, s.user_program, s.user_school,
-    [s.user_email, s.user_phone].filter(Boolean).join(' | '), s.user_linkedin]
-    .filter(Boolean).join('\n');
-  $('#sig-preview').textContent = 'Best,\n' + (sig || '[fill in your details above]');
+  const note = $('#s-profile-note');
+  if (note && !note.dataset.busy) {
+    note.textContent = (s.user_profile_raw || '').trim()
+      ? 'Your profile is loaded — drafts will compare it against theirs.'
+      : 'On your own profile: More → Save to PDF.';
+  }
 }
 
 function renderSlots() {
@@ -1288,6 +1336,31 @@ document.addEventListener('click', async (ev) => {
 });
 
 document.addEventListener('change', async (ev) => {
+  // Your own LinkedIn PDF, from Settings.
+  if (ev.target.id === 's-profile-pdf') {
+    const file = ev.target.files && ev.target.files[0];
+    if (!file) return;
+    const note = $('#s-profile-note');
+    note.dataset.busy = '1';
+    note.textContent = `Reading ${file.name}…`;
+    try {
+      const res = await api('/api/profile-pdf', 'POST', {
+        self: true, data: await fileToBase64(file),
+      });
+      const p = res.parsed;
+      note.textContent = p.ok
+        ? `Read ${p.roles} roles — most recently ${p.top_role} at ${p.top_company}.`
+        : 'The PDF was read, but no work history was found in it.';
+      toast(p.ok ? 'Your profile is loaded' : 'No work history found in that PDF', !p.ok);
+      delete note.dataset.busy;
+      return refresh();
+    } catch (e) {
+      delete note.dataset.busy;
+      note.textContent = e.message;
+      return toast(e.message, true);
+    }
+  }
+
   // Inline status change from the pipeline table. Moving someone along the
   // pipeline almost always means something else needs saying too, so the
   // profile opens rather than leaving you to hunt for it.
@@ -1383,13 +1456,20 @@ document.addEventListener('click', async (ev) => {
   if (id === 'btn-save-settings' || id === 'btn-save-policy') {
     const keys = id === 'btn-save-policy'
       ? ['followup_after_days', 'max_followups', 'thankyou_within_hours']
-      : ['user_name', 'user_email', 'user_program', 'user_school', 'user_phone',
-         'user_linkedin', 'resume_path', 'timezone', 'target_firms'];
+      : ['user_name', 'user_email', 'resume_path', 'timezone', 'target_firms'];
     const patch = {};
     keys.forEach(k => { patch[k] = $('#s-' + k).value; });
     try {
       await api('/api/settings', 'POST', patch);
       toast('Saved');
+      return refresh();
+    } catch (e) { return toast(e.message, true); }
+  }
+
+  if (id === 'btn-save-pitch') {
+    try {
+      await api('/api/settings', 'POST', { user_pitch: $('#s-user_pitch').value });
+      toast('Saved — drafts will use that line verbatim');
       return refresh();
     } catch (e) { return toast(e.message, true); }
   }

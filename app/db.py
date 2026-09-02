@@ -107,8 +107,10 @@ DEFAULT_SETTINGS = {
     "user_email": "",
     "user_program": "Class of 2028 | Master of Business Administration (M.B.A.)",
     "user_school": "Goizueta Business School | Emory University",
-    "user_phone": "",
-    "user_linkedin": "",
+    # Your own profile, so the app can work out what you and the person you
+    # are writing to actually have in common.
+    "user_profile_raw": "",
+    "user_pitch": "",
     "resume_path": "",
     "timezone": "America/New_York",
     "tz_label": "ET",
