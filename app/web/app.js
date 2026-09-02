@@ -222,8 +222,28 @@ function renderToday() {
       ${a.kind === 'thankyou' ? `<button class="btn gold sm" data-draft="thankyou" data-id="${a.person_id}">Draft thank-you</button>` : ''}
       ${a.kind === 'followup' ? `<button class="btn gold sm" data-draft="followup" data-id="${a.person_id}">Draft nudge</button>` : ''}
       <button class="btn sm" data-open="${a.person_id}">Open</button>
+      <button class="btn ghost sm" data-resolve="${esc(a.key)}"
+        title="Tick this off — it goes to the bin below">Done</button>
     </div>`).join('')
     : `<div class="card empty"><div class="big">✓</div>Nothing overdue. Good place to be.</div>`;
+
+  // Ticked off this session, and still recoverable until the app is closed.
+  const binned = STATE.bin || [];
+  $('#action-bin').innerHTML = binned.length ? `
+    <details class="paste-box" style="margin-top:14px">
+      <summary>Bin — ${binned.length} item${binned.length === 1 ? '' : 's'} ticked off</summary>
+      <p class="small muted" style="margin:10px 0">These stay resolved. They can
+        be put back until you close the app, after which the bin empties itself.</p>
+      ${binned.map(b => `
+        <div class="action low">
+          <div class="grow">
+            <span class="who">${esc(b.person_name || '')}</span>
+            <div class="detail">${esc(b.label)}${b.detail ? ' — ' + esc(b.detail) : ''}</div>
+          </div>
+          <button class="btn sm" data-restore="${esc(b.key)}">Put back</button>
+        </div>`).join('')}
+      <button class="btn ghost sm" id="btn-empty-bin" style="margin-top:6px">Empty bin now</button>
+    </details>` : '';
 
   const chats = STATE.chats || { current: [], upcoming: [], expired: [] };
 
@@ -1299,8 +1319,29 @@ async function testOutlook() {
 }
 
 document.addEventListener('click', async (ev) => {
-  const t = ev.target.closest('[data-view], [data-open], [data-prep], [data-slots], [data-pdf], [data-draft], [data-status], [data-day], [data-copy-q], [data-copy-text], [data-delnote], [data-goto], [data-tier]');
+  const t = ev.target.closest('[data-view], [data-open], [data-prep], [data-slots], [data-pdf], [data-draft], [data-status], [data-day], [data-copy-q], [data-copy-text], [data-delnote], [data-goto], [data-tier], [data-resolve], [data-restore]');
   if (!t) return;
+
+  if (t.dataset.resolve) {
+    const action = (STATE.actions || []).find(a => a.key === t.dataset.resolve);
+    if (!action) return;
+    try {
+      await api('/api/action/resolve', 'POST', {
+        key: action.key, person_id: action.person_id, kind: action.kind,
+        label: action.label, detail: action.detail, name: action.name,
+      });
+      toast(`Ticked off — in the bin until you close the app`);
+      return refresh();
+    } catch (e) { return toast(e.message, true); }
+  }
+
+  if (t.dataset.restore) {
+    try {
+      await api('/api/action/restore', 'POST', { key: t.dataset.restore });
+      toast('Put back on the list');
+      return refresh();
+    } catch (e) { return toast(e.message, true); }
+  }
 
   if (t.dataset.view) return switchView(t.dataset.view);
   if (t.dataset.goto) { ev.preventDefault(); closeModal(); return switchView(t.dataset.goto); }
@@ -1462,6 +1503,14 @@ document.addEventListener('click', async (ev) => {
     try {
       await api('/api/settings', 'POST', patch);
       toast('Saved');
+      return refresh();
+    } catch (e) { return toast(e.message, true); }
+  }
+
+  if (id === 'btn-empty-bin') {
+    try {
+      const res = await api('/api/bin/empty', 'POST', {});
+      toast(`Bin emptied — ${res.emptied} item${res.emptied === 1 ? '' : 's'} no longer recoverable`);
       return refresh();
     } catch (e) { return toast(e.message, true); }
   }

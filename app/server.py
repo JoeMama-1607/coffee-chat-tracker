@@ -33,6 +33,10 @@ import templates  # noqa: E402
 WEB_DIR = os.path.join(HERE, "web")
 TOKEN = secrets.token_urlsafe(24)
 
+# One id per run of the app. Items ticked off on Today are binned against it,
+# which is what makes the bin empty itself when the app is next opened.
+SESSION = secrets.token_urlsafe(12)
+
 _outlook_status = {"checked": False}
 _calendar_status = {"checked": False}
 _lock = threading.Lock()
@@ -75,9 +79,22 @@ def days_between(later, earlier):
     return (later - earlier).total_seconds() / 86400.0
 
 
-def compute_actions(people, settings):
+def action_key(kind, person, *marks):
+    """Identify an action by the situation that produced it, not just by kind.
+
+    Ticking off "follow up" means "I have dealt with this stretch of silence",
+    not "never mention follow-ups for this person again" — so the key carries
+    the state behind it. Send another email and the key changes, and the action
+    is due again on its own.
+    """
+    parts = [kind, str(person.get("id"))] + [str(m or "") for m in marks]
+    return ":".join(parts)
+
+
+def compute_actions(people, settings, resolved=None):
     """Derive what actually needs doing today, from the deck's own rules:
     follow up after a week of silence, thank-you inside 24 hours."""
+    resolved = resolved if resolved is not None else set()
     tz = availability.get_tz(settings.get("timezone", "America/New_York"))
     now = dt.datetime.now(tz)
     followup_after = float(settings.get("followup_after_days", 7))
@@ -105,6 +122,7 @@ def compute_actions(people, settings):
             actions.append({
                 "person_id": p["id"], "name": name, "firm": p.get("firm"),
                 "kind": "thankyou",
+                "key": action_key("thankyou", p, p.get("chat_at")),
                 "urgency": "overdue" if hours > thankyou_hours else "today",
                 "label": "Send thank-you note",
                 "detail": ("%.0f hours since the chat — the window is %d"
@@ -121,6 +139,7 @@ def compute_actions(people, settings):
                     actions.append({
                         "person_id": p["id"], "name": name, "firm": p.get("firm"),
                         "kind": "followup",
+                        "key": action_key("followup", p, p.get("last_outbound_at"), sent),
                         "urgency": "overdue" if quiet >= followup_after * 2 else "today",
                         "label": "Follow up (nudge #%d)" % (sent + 1),
                         "detail": "%.0f days since your last email, no reply" % quiet,
@@ -129,6 +148,7 @@ def compute_actions(people, settings):
                     actions.append({
                         "person_id": p["id"], "name": name, "firm": p.get("firm"),
                         "kind": "stop",
+                        "key": action_key("stop", p, sent),
                         "urgency": "low",
                         "label": "Stop following up",
                         "detail": "%d nudges sent — move on and ask a summer intern for help"
@@ -140,6 +160,7 @@ def compute_actions(people, settings):
             actions.append({
                 "person_id": p["id"], "name": name, "firm": p.get("firm"),
                 "kind": "reply",
+                "key": action_key("reply", p, p.get("last_inbound_at")),
                 "urgency": "today",
                 "label": "They replied — respond",
                 "detail": "Reply received %s" % last_in.strftime("%b %d"),
@@ -152,11 +173,14 @@ def compute_actions(people, settings):
                 actions.append({
                     "person_id": p["id"], "name": name, "firm": p.get("firm"),
                     "kind": "custom",
+                    "key": action_key("custom", p, p.get("next_action_date"),
+                                      p.get("next_action")),
                     "urgency": "overdue" if due < now else "today",
                     "label": p.get("next_action") or "Follow up",
                     "detail": "Due %s" % due.strftime("%b %d"),
                 })
 
+    actions = [a for a in actions if a.get("key") not in resolved]
     order = {"overdue": 0, "today": 1, "low": 2}
     actions.sort(key=lambda a: order.get(a["urgency"], 3))
     return actions
@@ -390,9 +414,10 @@ def state_payload():
         "settings": settings,
         "people": people,
         "statuses": [{"key": k, "label": l} for k, l in db.STATUSES],
-        "actions": compute_actions(people, settings),
+        "actions": compute_actions(people, settings, db.resolved_keys()),
         "coverage": firm_coverage(people, settings),
         "chats": chat_buckets(people, settings),
+        "bin": db.bin_items(SESSION),
         "questions": templates.QUESTION_BANK,
         "outlook": _outlook_status,
         "calendar": _calendar_status,
@@ -574,6 +599,27 @@ class Handler(BaseHTTPRequestHandler):
             return self._file(text.encode("utf-8"),
                               "text/calendar; charset=utf-8",
                               "Coffee chat holds.ics")
+
+        if path == "/api/action/resolve":
+            key = (body.get("key") or "").strip()
+            if not key:
+                return self._error("missing action key", 400)
+            db.resolve_action(
+                key, body.get("person_id"), body.get("kind", ""),
+                body.get("label", ""), body.get("detail", ""),
+                body.get("name", ""), SESSION,
+            )
+            return self._json({"ok": True})
+
+        if path == "/api/action/restore":
+            key = (body.get("key") or "").strip()
+            if not key:
+                return self._error("missing action key", 400)
+            db.restore_action(key)
+            return self._json({"ok": True})
+
+        if path == "/api/bin/empty":
+            return self._json({"ok": True, "emptied": db.empty_bin(SESSION)})
 
         if path == "/api/profile-pdf":
             # A LinkedIn "Save to PDF" export, for them or for you.
@@ -766,6 +812,9 @@ def main():
     args = parser.parse_args()
 
     db.init()
+    # Whatever the last run left in the bin stops being recoverable now.
+    db.close_previous_bins(SESSION)
+
     httpd = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     _server[0] = httpd
     port = httpd.server_address[1]

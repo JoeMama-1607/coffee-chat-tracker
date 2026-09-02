@@ -85,6 +85,26 @@ CREATE TABLE IF NOT EXISTS setting (
     value TEXT NOT NULL
 );
 
+-- Items ticked off on the Today page. Nothing on that page is stored — every
+-- action is worked out fresh from the people table — so ticking one off means
+-- remembering the exact situation that produced it. If that situation changes
+-- (they reply, you email again, a new chat is booked) the key changes with it
+-- and the action comes back on its own, which is what you want.
+--
+-- `session` is the run of the app that binned it. While it matches, the item
+-- sits in the bin and can be put back. On the next launch the bin is emptied:
+-- the item stays resolved, it just stops being recoverable.
+CREATE TABLE IF NOT EXISTS resolved_action (
+    key         TEXT PRIMARY KEY,
+    person_id   INTEGER REFERENCES person(id) ON DELETE CASCADE,
+    kind        TEXT DEFAULT '',
+    label       TEXT DEFAULT '',
+    detail      TEXT DEFAULT '',
+    person_name TEXT DEFAULT '',
+    resolved_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    session     TEXT DEFAULT ''
+);
+
 CREATE INDEX IF NOT EXISTS idx_person_status ON person(status);
 CREATE INDEX IF NOT EXISTS idx_note_person  ON note(person_id);
 CREATE INDEX IF NOT EXISTS idx_mail_person  ON mail_event(person_id);
@@ -408,6 +428,85 @@ def record_mail(person_id, direction, subject, counterpart, occurred_at,
             (occurred_at, person_id),
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+# ------------------------------------------------------- resolved actions
+
+def resolve_action(key, person_id, kind, label, detail, person_name, session):
+    conn = connect()
+    try:
+        conn.execute(
+            "INSERT INTO resolved_action"
+            "(key, person_id, kind, label, detail, person_name, session) "
+            "VALUES (?,?,?,?,?,?,?) "
+            "ON CONFLICT(key) DO UPDATE SET session=excluded.session, "
+            "resolved_at=CURRENT_TIMESTAMP",
+            (key, person_id, kind, label, detail, person_name, session),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def restore_action(key):
+    """Put it back on the Today list."""
+    conn = connect()
+    try:
+        conn.execute("DELETE FROM resolved_action WHERE key=?", (key,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def resolved_keys():
+    conn = connect()
+    try:
+        return {r["key"] for r in conn.execute("SELECT key FROM resolved_action")}
+    finally:
+        conn.close()
+
+
+def bin_items(session):
+    """What is still recoverable — this run's resolutions, newest first."""
+    if not session:
+        return []
+    conn = connect()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM resolved_action WHERE session=? "
+            "ORDER BY resolved_at DESC, rowid DESC", (session,)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def empty_bin(session):
+    """Let go of the undo, keep the resolution. Clearing `session` is what
+    takes an item out of the bin — deleting the row would put the action
+    straight back on the Today page, which is the opposite of emptying a bin.
+    """
+    conn = connect()
+    try:
+        cur = conn.execute(
+            "UPDATE resolved_action SET session='' WHERE session=? AND session<>''",
+            (session or "",))
+        conn.commit()
+        return cur.rowcount
+    finally:
+        conn.close()
+
+
+def close_previous_bins(session):
+    """On launch, anything binned by an earlier run stops being recoverable."""
+    conn = connect()
+    try:
+        cur = conn.execute(
+            "UPDATE resolved_action SET session='' WHERE session<>'' AND session<>?",
+            (session,))
+        conn.commit()
+        return cur.rowcount
     finally:
         conn.close()
 
