@@ -414,7 +414,7 @@ def state_payload():
         "settings": settings,
         "people": people,
         "statuses": [{"key": k, "label": l} for k, l in db.STATUSES],
-        "actions": compute_actions(people, settings, db.resolved_keys()),
+        "actions": compute_actions(people, settings, db.resolved_keys(SESSION)),
         "coverage": firm_coverage(people, settings),
         "chats": chat_buckets(people, settings),
         "bin": db.bin_items(SESSION),
@@ -618,9 +618,6 @@ class Handler(BaseHTTPRequestHandler):
             db.restore_action(key)
             return self._json({"ok": True})
 
-        if path == "/api/bin/empty":
-            return self._json({"ok": True, "emptied": db.empty_bin(SESSION)})
-
         if path == "/api/profile-pdf":
             # A LinkedIn "Save to PDF" export, for them or for you.
             try:
@@ -812,8 +809,9 @@ def main():
     args = parser.parse_args()
 
     db.init()
-    # Whatever the last run left in the bin stops being recoverable now.
-    db.close_previous_bins(SESSION)
+    # Ticking something off lasts for one run of the app. Anything binned by an
+    # earlier run is dropped now, so whatever is still outstanding comes back.
+    db.purge_old_resolutions(SESSION)
 
     httpd = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     _server[0] = httpd

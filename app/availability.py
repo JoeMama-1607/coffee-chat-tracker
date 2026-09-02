@@ -135,13 +135,21 @@ def _gap_between(a, b):
 
 
 def pick_spread(candidates, max_per_day, spread):
-    """Choose one day's windows.
+    """Choose one day's windows. Candidates are (start, end, gap) triples.
 
     Judged as a set rather than one at a time, because the two best windows
-    individually are usually the two halves of the same long afternoon. In
-    order: no two touching (10–1 *or* 1–4 is one block written twice, not a
-    choice), then lean away from whichever part of the day has already been
-    offered on other days, then prefer longer.
+    individually are usually two slices of the same long afternoon. Ranked by:
+
+      1. no two windows out of the same stretch of free time. A free 12:45–6
+         offered as "12:45–3:45 or 4:45–6" invents an hour of unavailability
+         in the middle of an afternoon you are free for. Two offers are only
+         a real choice when something of yours actually sits between them.
+      2. no two touching, so a genuine pair reads as two options.
+      3. lean away from whichever part of the day other days already used.
+      4. prefer the longer window.
+
+    Where a day cannot fill its quota without breaking (1) or (2), it offers
+    fewer windows instead of pretending.
     """
     fallback = None
     for take in range(min(max_per_day, len(candidates)), 0, -1):
@@ -151,16 +159,19 @@ def pick_spread(candidates, max_per_day, spread):
             if any(gap is None for gap in gaps):
                 continue        # overlapping windows are not two offers
             touching = sum(1 for gap in gaps if gap < SEPARATION)
+            shared = sum(1 for a, b in itertools.combinations(combo, 2)
+                         if a[2] == b[2])
 
             local = {}
             bucket_cost = 0
-            for start, _end in combo:
-                name = _bucket(start)
+            for window in combo:
+                name = _bucket(window[0])
                 bucket_cost += spread[name] + local.get(name, 0)
                 local[name] = local.get(name, 0) + 1
 
-            length = sum((end - start).total_seconds() for start, end in combo)
-            key = (touching, bucket_cost, -length, tuple(s for s, _ in combo))
+            length = sum((w[1] - w[0]).total_seconds() for w in combo)
+            key = (shared, touching, bucket_cost, -length,
+                   tuple(w[0] for w in combo))
             if best_key is None or key < best_key:
                 best, best_key = combo, key
 
@@ -168,18 +179,15 @@ def pick_spread(candidates, max_per_day, spread):
             continue
         if fallback is None:
             fallback = best
-        # A day with one long gap can only offer two windows by butting them
-        # together, and "2–5 or 5–6" is worse than simply "2–5". Drop to fewer
-        # windows rather than pretend that is a choice.
-        if best_key[0] == 0:
+        if best_key[0] == 0 and best_key[1] == 0:
             fallback = best
             break
 
     if fallback is None:
         return []
-    for start, _end in fallback:
-        spread[_bucket(start)] += 1
-    return sorted(fallback)
+    for window in fallback:
+        spread[_bucket(window[0])] += 1
+    return sorted((w[0], w[1]) for w in fallback)
 
 
 def _merge(intervals):
@@ -292,11 +300,13 @@ def find_windows(events, rules, now=None):
         # hours, so the choice below is made over the windows as they would
         # actually be offered.
         candidates = []
-        for f_start, f_end in free:
+        for gap_index, (f_start, f_end) in enumerate(free):
             for piece_start, piece_end in split_window(f_start, f_end, min_window, max_window):
                 tidied = tidy_window(piece_start, piece_end, min_window, max_window)
                 if tidied:
-                    candidates.append(tidied)
+                    # Carry which stretch of free time this came out of, so two
+                    # slices of one afternoon are never offered as two choices.
+                    candidates.append((tidied[0], tidied[1], gap_index))
         if not candidates:
             continue
 

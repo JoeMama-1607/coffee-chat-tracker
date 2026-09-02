@@ -89,11 +89,13 @@ CREATE TABLE IF NOT EXISTS setting (
 -- action is worked out fresh from the people table — so ticking one off means
 -- remembering the exact situation that produced it. If that situation changes
 -- (they reply, you email again, a new chat is booked) the key changes with it
--- and the action comes back on its own, which is what you want.
+-- and the action comes back on its own.
 --
--- `session` is the run of the app that binned it. While it matches, the item
--- sits in the bin and can be put back. On the next launch the bin is emptied:
--- the item stays resolved, it just stops being recoverable.
+-- Resolutions last for one run of the app and no longer. `session` records
+-- which run binned the item; while it matches, the item sits in the bin and
+-- can be put back. On the next launch every older row is deleted outright, so
+-- anything genuinely still outstanding is back on the list where it belongs.
+-- Ticking something off is for clearing today's noise, not for burying it.
 CREATE TABLE IF NOT EXISTS resolved_action (
     key         TEXT PRIMARY KEY,
     person_id   INTEGER REFERENCES person(id) ON DELETE CASCADE,
@@ -460,10 +462,14 @@ def restore_action(key):
         conn.close()
 
 
-def resolved_keys():
+def resolved_keys(session):
+    """Only this run's resolutions count — they do not outlive the session."""
+    if not session:
+        return set()
     conn = connect()
     try:
-        return {r["key"] for r in conn.execute("SELECT key FROM resolved_action")}
+        return {r["key"] for r in conn.execute(
+            "SELECT key FROM resolved_action WHERE session=?", (session,))}
     finally:
         conn.close()
 
@@ -482,29 +488,13 @@ def bin_items(session):
         conn.close()
 
 
-def empty_bin(session):
-    """Let go of the undo, keep the resolution. Clearing `session` is what
-    takes an item out of the bin — deleting the row would put the action
-    straight back on the Today page, which is the opposite of emptying a bin.
-    """
+def purge_old_resolutions(session):
+    """On launch, drop everything ticked off in an earlier run. Whatever is
+    still genuinely outstanding reappears on the Today list."""
     conn = connect()
     try:
         cur = conn.execute(
-            "UPDATE resolved_action SET session='' WHERE session=? AND session<>''",
-            (session or "",))
-        conn.commit()
-        return cur.rowcount
-    finally:
-        conn.close()
-
-
-def close_previous_bins(session):
-    """On launch, anything binned by an earlier run stops being recoverable."""
-    conn = connect()
-    try:
-        cur = conn.execute(
-            "UPDATE resolved_action SET session='' WHERE session<>'' AND session<>?",
-            (session,))
+            "DELETE FROM resolved_action WHERE session<>?", (session,))
         conn.commit()
         return cur.rowcount
     finally:

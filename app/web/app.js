@@ -232,8 +232,9 @@ function renderToday() {
   $('#action-bin').innerHTML = binned.length ? `
     <details class="paste-box" style="margin-top:14px">
       <summary>Bin — ${binned.length} item${binned.length === 1 ? '' : 's'} ticked off</summary>
-      <p class="small muted" style="margin:10px 0">These stay resolved. They can
-        be put back until you close the app, after which the bin empties itself.</p>
+      <p class="small muted" style="margin:10px 0">Ticked off for today only. Put
+        one back at any point, and when you close the app the bin is emptied —
+        anything still outstanding is back on the list next time you open it.</p>
       ${binned.map(b => `
         <div class="action low">
           <div class="grow">
@@ -242,7 +243,6 @@ function renderToday() {
           </div>
           <button class="btn sm" data-restore="${esc(b.key)}">Put back</button>
         </div>`).join('')}
-      <button class="btn ghost sm" id="btn-empty-bin" style="margin-top:6px">Empty bin now</button>
     </details>` : '';
 
   const chats = STATE.chats || { current: [], upcoming: [], expired: [] };
@@ -1330,7 +1330,7 @@ document.addEventListener('click', async (ev) => {
         key: action.key, person_id: action.person_id, kind: action.kind,
         label: action.label, detail: action.detail, name: action.name,
       });
-      toast(`Ticked off — in the bin until you close the app`);
+      toast('Ticked off for today — in the bin below');
       return refresh();
     } catch (e) { return toast(e.message, true); }
   }
@@ -1503,14 +1503,6 @@ document.addEventListener('click', async (ev) => {
     try {
       await api('/api/settings', 'POST', patch);
       toast('Saved');
-      return refresh();
-    } catch (e) { return toast(e.message, true); }
-  }
-
-  if (id === 'btn-empty-bin') {
-    try {
-      const res = await api('/api/bin/empty', 'POST', {});
-      toast(`Bin emptied — ${res.emptied} item${res.emptied === 1 ? '' : 's'} no longer recoverable`);
       return refresh();
     } catch (e) { return toast(e.message, true); }
   }
