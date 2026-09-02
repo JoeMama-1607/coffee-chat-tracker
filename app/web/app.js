@@ -422,6 +422,23 @@ async function openPerson(id, quiet = false) {
       <button class="btn sm" data-slots="${person.id}">Suggest slots</button>
     </div>
 
+    <div class="card" style="margin-bottom:16px;padding:12px 14px">
+      <div class="row" style="gap:8px">
+        <label class="btn gold sm" style="cursor:pointer;margin:0">
+          ${person.linkedin_raw ? 'Replace LinkedIn PDF' : 'Upload LinkedIn PDF'}
+          <input type="file" accept="application/pdf,.pdf" id="d-profile-pdf"
+                 data-person="${person.id}" style="display:none">
+        </label>
+        ${person.profile_pdf ? `<a class="btn ghost sm" href="/api/profile-pdf/${person.id}"
+            target="_blank" rel="noreferrer">Open stored PDF</a>` : ''}
+        <span class="small faint" id="d-pdf-note" style="flex:1;min-width:200px">
+          ${person.linkedin_raw
+            ? 'Profile loaded — the prep sheet and outreach draft compare it against yours.'
+            : 'On their profile: More → Save to PDF. Kept on this Mac.'}
+        </span>
+      </div>
+    </div>
+
     ${savedBlock}
 
     <div class="grid-2">
@@ -696,6 +713,27 @@ function renderPrepSheet(prep) {
       </div>` : ''}
     </div>` : '';
 
+  // What the two of you share — the part of the sheet that needs both profiles.
+  const common = (prep.common || []).length ? `
+    <h2>What you have in common</h2>
+    <p class="small muted" style="margin:-4px 0 10px">Worked out by comparing your
+      profile against theirs. Goizueta is left out on purpose — it is how you found
+      them, not a reason they will remember the conversation.</p>
+    ${prep.common.map(c => `
+      <div class="card" style="border-left:3px solid var(--ok);margin-bottom:8px;padding:12px 14px">
+        <div style="font-weight:650;margin-bottom:3px">${esc(c.label)}</div>
+        <div class="small muted" style="line-height:1.55">${esc(c.note)}</div>
+        <div class="qbank-item great" style="margin-top:9px">
+          <div style="flex:1">${esc(c.question)}</div>
+          <button class="btn ghost sm" data-copy-text="${esc(c.question)}">Copy</button>
+        </div>
+      </div>`).join('')}`
+    : (STATE.settings.user_profile_raw ? '' : `
+      <div class="banner info">Upload <em>your</em> LinkedIn PDF in
+        <a href="#" data-goto="settings">Settings</a> and this sheet will also show
+        what the two of you have in common, which is the strongest thing you can
+        open on.</div>`);
+
   return `
     <div class="card" style="border-left:3px solid var(--gold-500)">
       <h3 style="margin-bottom:6px">Summary</h3>
@@ -703,6 +741,7 @@ function renderPrepSheet(prep) {
       ${signals}
       <div class="small muted"><strong>First two minutes:</strong> ${esc(prep.opener)}</div>
     </div>
+    ${common}
     ${timeline}
     ${prepQuestionsHtml(prep)}
     ${prepFlowHtml(prep)}
@@ -1377,6 +1416,27 @@ document.addEventListener('click', async (ev) => {
 });
 
 document.addEventListener('change', async (ev) => {
+  // Their LinkedIn PDF, from the person panel.
+  if (ev.target.id === 'd-profile-pdf') {
+    const file = ev.target.files && ev.target.files[0];
+    if (!file || !CURRENT) return;
+    const note = $('#d-pdf-note');
+    note.textContent = `Reading ${file.name}…`;
+    try {
+      const res = await api('/api/profile-pdf', 'POST', {
+        person_id: CURRENT.id, data: await fileToBase64(file),
+      });
+      const p = res.parsed;
+      toast(p.ok ? `Read ${p.roles} roles — ${p.top_role} at ${p.top_company}`
+                 : 'The PDF was read, but no work history was found', !p.ok);
+      await refresh();
+      return openPerson(CURRENT.id, true);
+    } catch (e) {
+      note.textContent = e.message;
+      return toast(e.message, true);
+    }
+  }
+
   // Your own LinkedIn PDF, from Settings.
   if (ev.target.id === 's-profile-pdf') {
     const file = ev.target.files && ev.target.files[0];

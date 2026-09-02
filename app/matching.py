@@ -221,6 +221,92 @@ def common_ground(mine, theirs):
     return found
 
 
+def conversation_angles(mine, theirs, person=None):
+    """The overlap turned into something you can actually say on the call.
+
+    The email gets one line out of the strongest tie. A half hour needs more:
+    what you share, why it is worth raising, and the question it earns — each
+    one answerable only by this person, which is the whole difference between
+    a good question and a great one.
+    """
+    person = person or {}
+    firm = person.get("firm") or "the firm"
+    angles = []
+
+    for item in common_ground(mine, theirs):
+        kind = item["kind"]
+
+        if kind == "employer":
+            company = item["label"].replace("Both worked at ", "")
+            angles.append({
+                "label": item["label"],
+                "note": "The strongest opening you have. Shared ground with a "
+                        "stranger buys you candour almost immediately.",
+                "question": "We overlapped at %s, so I know how it works there. "
+                            "What carried over into %s, and what did you have to "
+                            "unlearn?" % (company, firm),
+            })
+
+        elif kind == "school":
+            school = item["label"].replace("Both studied at ", "")
+            angles.append({
+                "label": item["label"],
+                "note": "Worth raising early — it explains why you picked them "
+                        "out rather than anyone else at the firm.",
+                "question": "We came through %s. Looking back, what from there "
+                            "actually mattered once you were on projects?" % school,
+            })
+
+        elif kind == "country":
+            country = item["country"]
+            angles.append({
+                "label": item["label"],
+                "note": "They have already made the move you are in the middle "
+                        "of. Ask about the mechanics, not the sentiment — visa "
+                        "timing, recruiting differences, how long it took to "
+                        "feel fluent in the process.",
+                "question": "You built your career in %s before coming here. "
+                            "What did you have to learn about US recruiting that "
+                            "nobody warned you about?" % country,
+            })
+
+        elif kind == "discipline":
+            word = DISCIPLINE_WORDS[item["discipline"]]
+            angles.append({
+                "label": item["label"],
+                "note": "You are both making the same jump out of %s, so their "
+                        "answer maps directly onto your own case rather than "
+                        "being general advice." % word,
+                "question": "Coming from %s, which parts of that background did "
+                            "you find people actually valued, and which did you "
+                            "have to stop leading with?" % word,
+            })
+
+        elif kind == "pivot":
+            from_word = DISCIPLINE_WORDS.get(item["from"], "another field")
+            to_word = DISCIPLINE_WORDS[item["to"]]
+            angles.append({
+                "label": item["label"],
+                "note": "Not shared ground but a real contrast, which is its own "
+                        "reason to talk: they can tell you how far your starting "
+                        "point actually is from theirs.",
+                "question": "I am coming from %s rather than %s. Where does that "
+                            "put me behind, and where does it not matter as much "
+                            "as I think?" % (from_word, to_word),
+            })
+
+        elif kind == "skills":
+            angles.append({
+                "label": item["label"],
+                "note": "Small, but concrete — it shows you read past the "
+                        "headline.",
+                "question": item["phrase"].capitalize() +
+                            ". Does any of that still come up in your work now?",
+            })
+
+    return angles
+
+
 def their_story(theirs):
     """One clause describing where they are and where they came from, built
     only from what the profile says."""

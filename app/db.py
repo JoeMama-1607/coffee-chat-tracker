@@ -25,6 +25,14 @@ def db_path():
     return os.path.join(data_dir(), "tracker.sqlite3")
 
 
+def profiles_dir():
+    """Where uploaded LinkedIn PDFs are kept, alongside the database. They stay
+    so a profile can be re-read later without asking for the file again."""
+    path = os.path.join(data_dir(), "profiles")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
 SCHEMA = """
 PRAGMA journal_mode=WAL;
 
@@ -55,6 +63,7 @@ CREATE TABLE IF NOT EXISTS person (
     profile_updated_at TEXT,
     offered_slots      TEXT DEFAULT '',
     offered_slots_at   TEXT,
+    profile_pdf        TEXT DEFAULT '',
     archived      INTEGER DEFAULT 0,
     created_at    TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at    TEXT DEFAULT CURRENT_TIMESTAMP
@@ -132,6 +141,7 @@ DEFAULT_SETTINGS = {
     # Your own profile, so the app can work out what you and the person you
     # are writing to actually have in common.
     "user_profile_raw": "",
+    "user_profile_pdf": "",
     "user_pitch": "",
     "resume_path": "",
     "timezone": "America/New_York",
@@ -242,7 +252,7 @@ PERSON_FIELDS = [
     "first_contact_at", "last_outbound_at", "last_inbound_at", "chat_at",
     "thankyou_sent_at", "followups_sent", "next_action", "next_action_date",
     "linkedin_raw", "profile_updated_at", "offered_slots", "offered_slots_at",
-    "archived",
+    "profile_pdf", "archived",
 ]
 
 # Columns added after the first release. Existing databases are upgraded in
@@ -252,6 +262,7 @@ MIGRATIONS = [
     ("person", "profile_updated_at", "TEXT"),
     ("person", "offered_slots", "TEXT DEFAULT ''"),
     ("person", "offered_slots_at", "TEXT"),
+    ("person", "profile_pdf", "TEXT DEFAULT ''"),
 ]
 
 

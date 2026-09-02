@@ -720,8 +720,9 @@ def summarise(profile, person, signals):
     mba = next((s for s in signals if s["key"] == "mba"), None)
     same = next((s for s in signals if s["key"] == "same_school"), None)
     if same:
-        bits.append("They came through Goizueta as well, which is the strongest "
-                    "opening you have — use it in the first minute.")
+        bits.append("They came through Goizueta as well — which is how you found "
+                    "them, not a reason they will remember the call. It is worth "
+                    "a sentence, not the opening.")
     elif mba:
         bits.append("They have an MBA from %s." % mba["school"])
 
@@ -847,10 +848,6 @@ def _journey(signals, person):
 
 def opener(profile, person, signals):
     """The first two minutes. Specific beats warm."""
-    same = next((s for s in signals if s["key"] == "same_school"), None)
-    if same:
-        return ("Open on Goizueta — you're both from the same programme. Ask what "
-                "their year was like before you ask anything about the firm.")
     switch = next((s for s in signals if s["key"] == "career_switch"), None)
     if switch:
         return ("Open on the pivot: you noticed they came from %s, and that is "
@@ -898,8 +895,15 @@ def build_flow(person, tailored, culture, journey, opening):
     ]
 
 
-def prep_sheet(person, settings):
-    """Everything the Prep button needs."""
+def prep_sheet(person, settings, mine=None):
+    """Everything the Prep button needs.
+
+    `mine` is your own parsed profile. With it the sheet stops being a
+    description of them and becomes a comparison — what the two of you share,
+    and the questions only that overlap earns.
+    """
+    import matching  # here rather than at import time; profile.py is the lower layer
+
     raw = person.get("linkedin_raw") or ""
     profile = parse(raw) if raw.strip() else {"ok": False, "reason": "missing"}
 
@@ -916,6 +920,7 @@ def prep_sheet(person, settings):
             "culture": culture,
             "journey": journey,
             "tailored": [],
+            "common": [],
             "flow": build_flow(person, [], culture, journey, opening),
         }
 
@@ -924,6 +929,17 @@ def prep_sheet(person, settings):
     culture = _culture(signals, person)
     journey = _journey(signals, person)
     opening = opener(profile, person, signals)
+
+    # What the two of you share, and what to do with it in the half hour.
+    common = matching.conversation_angles(mine, profile, person) if mine else []
+    if common:
+        # The overlap is the strongest opening available — better than anything
+        # derived from their profile alone.
+        opening = ("Open on the overlap — %s. %s"
+                   % (common[0]["label"], common[0]["note"]))
+        # Its question belongs at the front of the tailored list.
+        tailored = ([{"tier": "great", "why": common[0]["label"],
+                      "text": common[0]["question"]}] + tailored)[:4]
 
     timeline = []
     for role in profile["roles"][:8]:
@@ -945,6 +961,7 @@ def prep_sheet(person, settings):
         "location": profile.get("location", ""),
         "summary": summarise(profile, person, signals),
         "signals": [{"key": s["key"], "label": s["label"]} for s in signals],
+        "common": common,
         "timeline": timeline,
         "education": profile.get("education", []),
         "tailored": tailored,

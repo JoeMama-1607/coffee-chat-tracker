@@ -214,6 +214,16 @@ def firm_coverage(people, settings):
     return rows
 
 
+def _store_pdf(blob, name):
+    """Keep the uploaded file next to the database. The text is what the app
+    reads, but holding on to the original means a profile can be read again
+    later — after a parser fix, say — without asking for the file twice."""
+    path = os.path.join(db.profiles_dir(), "%s.pdf" % name)
+    with open(path, "wb") as fh:
+        fh.write(blob)
+    return path
+
+
 def _profile_summary(parsed):
     """Just enough for the interface to say what it understood."""
     if not parsed.get("ok"):
@@ -557,6 +567,22 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/state":
             _last_beat[0] = time.time()
             return self._json(state_payload())
+        if path.startswith("/api/profile-pdf/"):
+            # Hand back the file that was uploaded, so it can be reopened from
+            # the app rather than hunted for in Downloads.
+            who = path.rsplit("/", 1)[1]
+            if who == "me":
+                stored = db.get_settings().get("user_profile_pdf", "")
+                label = "My LinkedIn profile.pdf"
+            else:
+                person = db.get_person(int(who))
+                stored = (person or {}).get("profile_pdf", "")
+                label = "%s - LinkedIn.pdf" % (person or {}).get("name", "profile")
+            if not stored or not os.path.isfile(stored):
+                return self._error("no stored PDF for that profile", 404)
+            with open(stored, "rb") as fh:
+                return self._file(fh.read(), "application/pdf", label)
+
         if path.startswith("/api/person/"):
             pid = int(path.rsplit("/", 1)[1])
             person = db.get_person(pid)
@@ -636,14 +662,18 @@ class Handler(BaseHTTPRequestHandler):
                 availability.get_tz(settings.get("timezone"))).isoformat()
 
             if body.get("self"):
-                db.save_settings({"user_profile_raw": text})
+                db.save_settings({
+                    "user_profile_raw": text,
+                    "user_profile_pdf": _store_pdf(blob, "me"),
+                })
                 return self._json({"ok": True, "self": True, "text": text,
                                    "parsed": _profile_summary(parsed)})
 
             person = db.get_person(int(body["person_id"]))
             if not person:
                 return self._error("person not found", 404)
-            patch = {"linkedin_raw": text, "profile_updated_at": stamp}
+            patch = {"linkedin_raw": text, "profile_updated_at": stamp,
+                     "profile_pdf": _store_pdf(blob, "person-%d" % person["id"])}
             # The export carries facts the row may be missing.
             if parsed.get("ok"):
                 current = (parsed.get("roles") or [{}])[0]
@@ -734,7 +764,7 @@ class Handler(BaseHTTPRequestHandler):
                 "linkedin_raw": body.get("raw", ""),
                 "profile_updated_at": stamp,
             })
-        sheet = profile_reader.prep_sheet(person, settings)
+        sheet = profile_reader.prep_sheet(person, settings, my_profile(settings))
         sheet["person"] = {
             "id": person["id"], "name": person["name"],
             "firm": person.get("firm", ""), "role": person.get("role", ""),
