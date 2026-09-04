@@ -237,8 +237,12 @@ def busy_intervals(events, tz, rules):
     return _merge(raw)
 
 
-def find_windows(events, rules, now=None):
+def find_windows(events, rules, now=None, after=None):
     """Return offerable windows grouped by day.
+
+    `after` is a date already offered: the search picks up the day following
+    it, which is how asking for more slots continues past what you have seen
+    rather than handing back the same three days.
 
     rules keys: timezone, tz_label, work_days, work_start, work_end,
     min_window_minutes, buffer_minutes, lead_days, horizon_days,
@@ -267,6 +271,8 @@ def find_windows(events, rules, now=None):
     cursor = now.date()
     for offset in range(horizon + 1):
         day = cursor + dt.timedelta(days=offset)
+        if after and day <= after:
+            continue
         if (day.weekday() + 1) not in work_days:
             continue
 

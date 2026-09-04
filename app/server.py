@@ -342,13 +342,27 @@ def chat_buckets(people, settings):
     return buckets
 
 
-def build_slots(settings, refresh_days=None):
+def build_slots(settings, refresh_days=None, after=None):
     tz = availability.get_tz(settings.get("timezone", "America/New_York"))
     now = dt.datetime.now(tz)
     horizon = int(refresh_days or settings.get("horizon_days", 14))
-    end = now + dt.timedelta(days=horizon + 1)
+
+    # Asking for more slots means looking past what has already been offered,
+    # so the calendar read has to reach that far too.
+    cutoff = None
+    if after:
+        parsed = availability.parse_iso(str(after))
+        if parsed:
+            cutoff = parsed.date()
+    start_of_read = now
+    if cutoff:
+        from_day = dt.datetime(cutoff.year, cutoff.month, cutoff.day, tzinfo=tz)
+        start_of_read = max(now, from_day)
+
+    end = start_of_read + dt.timedelta(days=horizon + 1)
     payload = macos.read_calendar(now, end)
-    days = availability.find_windows(payload.get("events", []), settings, now=now)
+    days = availability.find_windows(payload.get("events", []), settings,
+                                     now=now, after=cutoff)
     lines = availability.format_slot_lines(days, settings.get("tz_label", "ET"))
     return {
         "days": days,
@@ -610,7 +624,8 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/slots":
             with _lock:
-                return self._json({"ok": True, **build_slots(settings, body.get("days"))})
+                return self._json({"ok": True, **build_slots(
+                    settings, body.get("days"), body.get("after"))})
 
         if path == "/api/slots.ics":
             # Export exactly what is on screen, so the file and the email agree.

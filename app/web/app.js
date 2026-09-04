@@ -934,24 +934,15 @@ function paintSuggestSlots(person, data, picked) {
     ? `<div class="banner warn">Demo calendar — these windows are simulated.</div>`
     : data.note ? `<div class="banner info">${esc(data.note)}</div>` : '';
 
-  const list = data.days.map((day, di) => `
-    <div class="slot-day">
-      <div class="slot-day-label">${esc(day.label)}</div>
-      ${day.windows.map((w, wi) => `
-        <label class="slot-pick">
-          <input type="checkbox" data-pick="${di}:${wi}"
-                 ${picked.has(`${di}:${wi}`) ? 'checked' : ''}>
-          <span>${esc(w.text)} ${esc(tzLabel)}</span>
-          <span class="small faint">${w.minutes} min</span>
-        </label>`).join('')}
-    </div>`).join('');
-
   $('#m-body').innerHTML = `
     ${banner}
-    <p class="small muted" style="margin-top:0">Conflict-free windows from your
-      calendar, ${data.event_count} event${data.event_count === 1 ? '' : 's'} considered.
-      Untick anything you'd rather not offer ${esc(person.name.split(' ')[0])}.</p>
-    ${list}
+    <p class="small muted" style="margin-top:0" id="slot-intro"></p>
+    <div id="slot-list"></div>
+    <div class="row" style="margin:4px 0 2px">
+      <button class="btn ghost sm" id="slot-more">Request 3 more days</button>
+      <span class="small faint" id="slot-more-note">Keeps what you have ticked and
+        looks further ahead.</span>
+    </div>
     <h3 style="margin:16px 0 6px">What they'll see</h3>
     <div id="slot-preview"></div>
     <div class="row" style="margin-top:14px">
@@ -969,6 +960,25 @@ function paintSuggestSlots(person, data, picked) {
         won't offer it to anyone else. Delete them if the chat falls through.</span>
     </div>`;
 
+  /* The list is redrawn whenever more days arrive, so it lives in its own
+     container — the change listener below is bound once, to the panel. */
+  const renderList = () => {
+    $('#slot-intro').innerHTML = `Conflict-free windows from your calendar,
+      ${data.event_count} event${data.event_count === 1 ? '' : 's'} considered.
+      Untick anything you'd rather not offer ${esc(person.name.split(' ')[0])}.`;
+    $('#slot-list').innerHTML = data.days.map((day, di) => `
+      <div class="slot-day">
+        <div class="slot-day-label">${esc(day.label)}</div>
+        ${day.windows.map((w, wi) => `
+          <label class="slot-pick">
+            <input type="checkbox" data-pick="${di}:${wi}"
+                   ${picked.has(`${di}:${wi}`) ? 'checked' : ''}>
+            <span>${esc(w.text)} ${esc(tzLabel)}</span>
+            <span class="small faint">${w.minutes} min</span>
+          </label>`).join('')}
+      </div>`).join('');
+  };
+
   const preview = () => {
     const chosen = pickedDays(data.days, picked);
     const lines = slotLinesFor(chosen, tzLabel);
@@ -977,7 +987,42 @@ function paintSuggestSlots(person, data, picked) {
       : `<div class="small faint">Nothing ticked — the draft would go out with no times in it.</div>`;
     return lines;
   };
+
+  renderList();
   let lines = preview();
+
+  $('#slot-more').onclick = async (ev) => {
+    const btn = ev.currentTarget;
+    const note = $('#slot-more-note');
+    btn.disabled = true;
+    btn.textContent = 'Reading further ahead…';
+    try {
+      const last = data.days[data.days.length - 1];
+      const res = await api('/api/slots', 'POST', { after: last && last.date });
+      if (!res.days.length) {
+        note.textContent = 'Nothing further ahead fits your rules — widen the '
+          + 'look-ahead or working hours on the Slots tab.';
+      } else {
+        // Appended, never prepended: the picked keys are positional, so
+        // anything already ticked has to keep the index it was ticked under.
+        const base = data.days.length;
+        res.days.forEach((day, i) => {
+          data.days.push(day);
+          day.windows.forEach((w, wi) => picked.add(`${base + i}:${wi}`));
+        });
+        data.event_count = res.event_count;
+        note.textContent = `Now showing ${data.days.length} days.`;
+        renderList();
+        lines = preview();
+      }
+    } catch (e) {
+      note.textContent = e.message;
+      toast(e.message, true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Request 3 more days';
+    }
+  };
 
   $('#m-body').addEventListener('change', (ev) => {
     const box = ev.target.closest('[data-pick]');
