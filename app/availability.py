@@ -57,12 +57,11 @@ def parse_hhmm(value, fallback):
 
 
 def fmt_time(moment):
-    """9:00 -> '9am'; 16:30 -> '4:30pm'. Matches the deck's email examples."""
+    """9:00 -> '9:00am'; 16:30 -> '4:30pm'. Always on the hour or half hour —
+    never a quarter-past or quarter-to — so it reads cleanly at a glance."""
     hour = moment.hour % 12 or 12
     suffix = "am" if moment.hour < 12 else "pm"
-    if moment.minute:
-        return "%d:%02d%s" % (hour, moment.minute, suffix)
-    return "%d%s" % (hour, suffix)
+    return "%d:%02d%s" % (hour, moment.minute, suffix)
 
 
 def fmt_day(day):
@@ -71,13 +70,14 @@ def fmt_day(day):
 
 
 def tidy_window(start, end, min_window, max_window):
-    """Make a raw gap presentable: land on quarter hours, and don't offer a
-    seven-hour stretch — "I'm free all Friday" reads as no plan at all."""
-    spare = start.minute % 15
+    """Make a raw gap presentable: land on the hour or half hour — nothing
+    like 2:15 or 3:45 — and don't offer a seven-hour stretch — "I'm free all
+    Friday" reads as no plan at all."""
+    spare = start.minute % 30
     if spare:
-        start += dt.timedelta(minutes=15 - spare)
+        start += dt.timedelta(minutes=30 - spare)
     start = start.replace(second=0, microsecond=0)
-    end = (end - dt.timedelta(minutes=end.minute % 15)).replace(second=0, microsecond=0)
+    end = (end - dt.timedelta(minutes=end.minute % 30)).replace(second=0, microsecond=0)
     if end - start > max_window:
         end = start + max_window
     if end - start < min_window:
@@ -205,7 +205,11 @@ def _merge(intervals):
 
 
 def busy_intervals(events, tz, rules):
-    """Normalise calendar events into merged busy (start, end) pairs in `tz`."""
+    """Normalise calendar events into merged busy (start, end) pairs in `tz`.
+
+    The buffer only pushes the *end* of an event later, never the *start*
+    earlier: a coffee chat can run right up until class starts, but needs a
+    real gap after class ends before the next one begins."""
     ignore_all_day = rules.get("ignore_all_day", True)
     ignore_tentative = rules.get("ignore_tentative", True)
     excluded = {c.strip().lower()
@@ -232,7 +236,7 @@ def busy_intervals(events, tz, rules):
             start = start.replace(tzinfo=tz)
         if end.tzinfo is None:
             end = end.replace(tzinfo=tz)
-        raw.append((start.astimezone(tz) - buffer_delta,
+        raw.append((start.astimezone(tz),
                     end.astimezone(tz) + buffer_delta))
     return _merge(raw)
 
@@ -280,10 +284,10 @@ def find_windows(events, rules, now=None, after=None):
         day_end = dt.datetime(day.year, day.month, day.day, eh, em, tzinfo=tz)
         if day_start < earliest:
             day_start = earliest.replace(second=0, microsecond=0)
-            # round up to the next quarter hour so slots read cleanly
-            spare = day_start.minute % 15
+            # round up to the next half hour so slots read cleanly
+            spare = day_start.minute % 30
             if spare:
-                day_start += dt.timedelta(minutes=15 - spare)
+                day_start += dt.timedelta(minutes=30 - spare)
         if day_end - day_start < min_window:
             continue
 

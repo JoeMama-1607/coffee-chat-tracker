@@ -25,6 +25,17 @@ def db_path():
     return os.path.join(data_dir(), "tracker.sqlite3")
 
 
+def resume_dir():
+    """Where the uploaded resume copy lives, alongside the database.
+
+    Keeping our own copy matters: most people keep their resume in Documents or
+    Downloads, which macOS silently stops this app from reading. A copy here is
+    always readable, so it can always be attached."""
+    path = os.path.join(data_dir(), "resume")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
 def profiles_dir():
     """Where uploaded LinkedIn PDFs are kept, alongside the database. They stay
     so a profile can be re-read later without asking for the file again."""
@@ -48,6 +59,7 @@ CREATE TABLE IF NOT EXISTS person (
     is_alum       INTEGER DEFAULT 0,
     tier          TEXT DEFAULT 'B',
     source        TEXT DEFAULT '',
+    contact_channel TEXT DEFAULT '',   -- how you first reached them: email | linkedin
     status        TEXT DEFAULT 'uninitiated',
     priority_note TEXT DEFAULT '',
     referred_by   INTEGER REFERENCES person(id) ON DELETE SET NULL,
@@ -129,7 +141,6 @@ STATUSES = [
     ("scheduled", "Chat scheduled"),
     ("chat_done", "Chat done"),
     ("thankyou_sent", "Thank-you sent"),
-    ("nurturing", "Nurturing"),
     ("no_response", "No response"),
 ]
 
@@ -151,7 +162,7 @@ DEFAULT_SETTINGS = {
     "work_start": "09:00",
     "work_end": "18:00",
     "min_window_minutes": "60",
-    "max_window_minutes": "180",
+    "max_window_minutes": "120",
     "outlook_lookback_days": "30",
     "buffer_minutes": "15",
     "lead_days": "0",
@@ -248,7 +259,7 @@ def save_settings(patch):
 
 PERSON_FIELDS = [
     "name", "email", "firm", "role", "office", "linkedin", "grad_year",
-    "is_alum", "tier", "source", "status", "priority_note", "referred_by",
+    "is_alum", "tier", "source", "contact_channel", "status", "priority_note", "referred_by",
     "first_contact_at", "last_outbound_at", "last_inbound_at", "chat_at",
     "thankyou_sent_at", "followups_sent", "next_action", "next_action_date",
     "linkedin_raw", "profile_updated_at", "offered_slots", "offered_slots_at",
@@ -263,6 +274,7 @@ MIGRATIONS = [
     ("person", "offered_slots", "TEXT DEFAULT ''"),
     ("person", "offered_slots_at", "TEXT"),
     ("person", "profile_pdf", "TEXT DEFAULT ''"),
+    ("person", "contact_channel", "TEXT DEFAULT ''"),
 ]
 
 
@@ -296,6 +308,17 @@ def migrate(conn):
     lead = conn.execute("SELECT value FROM setting WHERE key='lead_days'").fetchone()
     if lead and lead["value"].strip() == "2":
         conn.execute("UPDATE setting SET value='0' WHERE key='lead_days'")
+
+    # A day's longest offered window shrank from 3 hours to 2, on the same
+    # "only if you never changed it yourself" terms.
+    max_window = conn.execute(
+        "SELECT value FROM setting WHERE key='max_window_minutes'").fetchone()
+    if max_window and max_window["value"].strip() == "180":
+        conn.execute("UPDATE setting SET value='120' WHERE key='max_window_minutes'")
+
+    # "Nurturing" is gone as a stage — it always meant "thank-you already
+    # sent, ongoing", which thankyou_sent already covers.
+    conn.execute("UPDATE person SET status='thankyou_sent' WHERE status='nurturing'")
 
 
 def list_people(include_archived=False):
@@ -357,6 +380,11 @@ def create_person(data):
     data = dict(data)
     if data.get("firm"):
         data["firm"] = canonical_firm(data["firm"])
+    # Most people you're chatting with are Goizueta alumni — imports and any
+    # other path that doesn't set this explicitly should assume that rather
+    # than the exception.
+    if "is_alum" not in data:
+        data["is_alum"] = 1
     fields = [f for f in PERSON_FIELDS if f in data]
     if "name" not in fields:
         raise ValueError("name is required")
@@ -473,20 +501,25 @@ def restore_action(key):
         conn.close()
 
 
-def resolved_keys(session):
-    """Only this run's resolutions count — they do not outlive the session."""
-    if not session:
-        return set()
+def resolved_keys():
+    """Every action ever ticked off, across every run. A resolution is keyed
+    to the exact situation that produced it (`action_key()` folds in the
+    outbound timestamp, the reply timestamp, the due date — whatever makes
+    the situation what it is), so a genuinely new situation always mints a
+    new key on its own. Nothing here needs to expire for that to work; it
+    only needs to stay resolved until the facts underneath it change."""
     conn = connect()
     try:
-        return {r["key"] for r in conn.execute(
-            "SELECT key FROM resolved_action WHERE session=?", (session,))}
+        return {r["key"] for r in conn.execute("SELECT key FROM resolved_action")}
     finally:
         conn.close()
 
 
 def bin_items(session):
-    """What is still recoverable — this run's resolutions, newest first."""
+    """What is still recoverable with one click — just this run's ticks, so
+    the bin reads as 'what I did just now' rather than a growing history.
+    Anything ticked off in an earlier run is still resolved (see
+    `resolved_keys`), it just no longer shows up here to undo."""
     if not session:
         return []
     conn = connect()
@@ -495,19 +528,6 @@ def bin_items(session):
             "SELECT * FROM resolved_action WHERE session=? "
             "ORDER BY resolved_at DESC, rowid DESC", (session,)).fetchall()
         return [dict(r) for r in rows]
-    finally:
-        conn.close()
-
-
-def purge_old_resolutions(session):
-    """On launch, drop everything ticked off in an earlier run. Whatever is
-    still genuinely outstanding reappears on the Today list."""
-    conn = connect()
-    try:
-        cur = conn.execute(
-            "DELETE FROM resolved_action WHERE session<>?", (session,))
-        conn.commit()
-        return cur.rowcount
     finally:
         conn.close()
 

@@ -224,7 +224,7 @@ h3 { font-size: 15px; margin: 0 0 8px; font-weight: 620; }
 
 /* forms */
 label.field { display: block; margin-bottom: 12px; }
-label.field > span { display: block; font-size: 12px; color: var(--text-muted);
+label.field > span, .field-label { display: block; font-size: 12px; color: var(--text-muted);
   margin-bottom: 4px; font-weight: 550; }
 input[type=text], input[type=email], input[type=date], input[type=time],
 input[type=number], input[type=datetime-local], select, textarea {
@@ -266,23 +266,38 @@ td select { padding: 3px 6px; font-size: 12px; border-color: var(--border); }
 .bar .sched { background: var(--gold-500); }
 .bar .pend { background: var(--border-strong); }
 
-/* drawer */
+/* referral network */
+/* pipeline tree */
+.tree-firm { margin-bottom: 8px; }
+.tree-firm > summary { font-weight: 650; }
+.tree-node { padding: 5px 0; border-left: 2px solid var(--border); }
+.tree-node > .btn { margin-right: 8px; }
+.tree-dot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  margin-right: 7px; vertical-align: 1px;
+}
+
+/* drawer — a centered pop-up over a blurred background, not a side panel */
 .scrim {
-  position: fixed; inset: 0; background: rgba(6, 14, 32, .42);
-  opacity: 0; pointer-events: none; transition: opacity .16s; z-index: 40;
-  backdrop-filter: blur(1.5px);
+  position: fixed; inset: 0; background: rgba(6, 14, 32, .45);
+  opacity: 0; pointer-events: none; transition: opacity .18s; z-index: 40;
+  backdrop-filter: blur(7px); -webkit-backdrop-filter: blur(7px);
 }
 .scrim.open { opacity: 1; pointer-events: auto; }
 .drawer {
-  position: fixed; top: 0; right: 0; bottom: 0; width: min(560px, 94vw);
-  background: var(--surface); border-left: 1px solid var(--border);
-  box-shadow: var(--shadow); transform: translateX(100%);
-  transition: transform .2s cubic-bezier(.3, .8, .4, 1); z-index: 50;
+  position: fixed; top: 50%; left: 50%; width: 80vw; height: 80vh;
+  max-width: 1200px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 16px; box-shadow: var(--shadow);
+  transform: translate(-50%, -50%) scale(.96); opacity: 0; pointer-events: none;
+  transition: transform .18s cubic-bezier(.3, .8, .4, 1), opacity .18s;
+  z-index: 50;
   display: flex; flex-direction: column;
 }
-.drawer.open { transform: none; }
-.drawer-head { padding: 16px 20px; border-bottom: 1px solid var(--border); }
+.drawer.open { transform: translate(-50%, -50%) scale(1); opacity: 1; pointer-events: auto; }
+.drawer-head { padding: 16px 20px; border-bottom: 1px solid var(--border); border-radius: 16px 16px 0 0; }
 .drawer-body { padding: 18px 20px 40px; overflow-y: auto; flex: 1; }
+#d-chat-time { font-size: 16px; font-weight: 700; color: var(--gold-600); margin-top: 4px; }
 
 .modal {
   position: fixed; inset: 0; z-index: 60; display: none;
@@ -373,13 +388,6 @@ td select { padding: 3px 6px; font-size: 12px; border-color: var(--border); }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 .toast.bad { background: #7a1f1f; }
 
-.pill-tabs { display: flex; gap: 4px; margin-bottom: 14px; flex-wrap: wrap; }
-.pill-tabs button {
-  border: 1px solid var(--border); background: var(--surface); border-radius: 20px;
-  padding: 4px 13px; font-size: 12.5px; cursor: pointer; color: var(--text-muted);
-}
-.pill-tabs button.active { background: var(--navy-700); border-color: var(--navy-700); color: #fff; font-weight: 600; }
-
 code.k { font-family: var(--mono); font-size: 12px; background: var(--surface-2);
   border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
 
@@ -393,4 +401,5 @@ mark.gap { background: rgba(242, 169, 0, .35); color: inherit; border-radius: 3p
   .grid-2, .grid-3 { grid-template-columns: 1fr; }
   .cov { grid-template-columns: 1fr 90px; }
   .cov .bar { display: none; }
+  .drawer { width: 94vw; height: 90vh; }
 }

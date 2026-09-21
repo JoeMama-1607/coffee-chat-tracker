@@ -25,12 +25,6 @@
     <button class="nav-item" data-view="pipeline">
       <span>▤</span><span class="txt">Pipeline</span><span class="count" id="nav-people">0</span>
     </button>
-    <button class="nav-item" data-view="slots">
-      <span>◷</span><span class="txt">Slots</span>
-    </button>
-    <button class="nav-item" data-view="prep">
-      <span>✎</span><span class="txt">Prep</span>
-    </button>
     <button class="nav-item" data-view="settings">
       <span>⚙</span><span class="txt">Settings</span>
     </button>
@@ -71,8 +65,6 @@
       <h2>Upcoming chats</h2>
       <div id="upcoming"></div>
 
-      <div id="expired-chats"></div>
-
       <h2>Firm coverage</h2>
       <div class="card" id="coverage"></div>
     </section>
@@ -87,6 +79,12 @@
         </div>
         <button class="btn primary" id="btn-add">+ Add person</button>
       </div>
+
+      <div class="row between" style="margin:16px 0 8px">
+        <h2 style="margin:0">Who you've talked to, by company</h2>
+        <button class="btn ghost sm" id="tree-toggle">Hide tree</button>
+      </div>
+      <div id="pipeline-tree" style="margin-bottom:22px"></div>
 
       <div class="row" style="margin-bottom:12px">
         <input type="text" id="filter-search" placeholder="Search name, firm, role…" style="max-width:280px">
@@ -110,65 +108,6 @@
       <div id="pipeline-empty"></div>
     </section>
 
-    <!-- ------------------------------------------------------- SLOTS -->
-    <section class="view" id="view-slots">
-      <h1>Availability</h1>
-      <p class="lede">Reads your Apple Calendar, subtracts everything you are
-        already committed to plus a buffer, and gives you conflict-free windows
-        formatted the way the deck's example email lays them out.</p>
-
-      <div id="slots-banner"></div>
-
-      <div class="card" style="margin-bottom:18px">
-        <h3>Rules</h3>
-        <div class="grid-3">
-          <label class="field"><span>Working hours start</span><input type="time" id="r-work_start"></label>
-          <label class="field"><span>Working hours end</span><input type="time" id="r-work_end"></label>
-          <label class="field"><span>Time zone label</span><input type="text" id="r-tz_label" placeholder="ET"></label>
-        </div>
-        <label class="field"><span>Days you'll take chats</span>
-          <div class="row" id="r-work_days"></div>
-        </label>
-        <div class="grid-3">
-          <label class="field"><span>Minimum window (min)</span><input type="number" id="r-min_window_minutes" min="30" step="15"></label>
-          <label class="field"><span>Buffer around events (min)</span><input type="number" id="r-buffer_minutes" min="0" step="5"></label>
-          <label class="field"><span>Earliest, days out</span><input type="number" id="r-lead_days" min="0"></label>
-        </div>
-        <div class="grid-3">
-          <label class="field"><span>Look ahead (days)</span><input type="number" id="r-horizon_days" min="3"></label>
-          <label class="field"><span>Days to offer</span><input type="number" id="r-slots_wanted" min="1" max="6"></label>
-          <label class="field"><span>Windows per day</span><input type="number" id="r-max_per_day" min="1" max="4"></label>
-        </div>
-        <label class="field"><span>Calendars to ignore (comma separated)</span>
-          <input type="text" id="r-excluded_calendars" placeholder="Birthdays, Holidays"></label>
-        <div class="row">
-          <button class="btn gold" id="btn-find-slots">Find my availability</button>
-          <button class="btn ghost sm" id="btn-save-rules">Save rules</button>
-        </div>
-      </div>
-
-      <div id="slots-result"></div>
-    </section>
-
-    <!-- -------------------------------------------------------- PREP -->
-    <section class="view" id="view-prep">
-      <h1>Prep</h1>
-      <p class="lede">The structure a coffee chat tends to follow, and questions
-        worth having in your pocket. Copy one, then make it yours — the generic
-        version is the one they've heard four times this week.</p>
-
-      <h2>How the call runs</h2>
-      <div class="card" id="call-structure"></div>
-
-      <h2>Question bank</h2>
-      <div class="pill-tabs" id="q-tabs">
-        <button class="active" data-tier="">All</button>
-        <button data-tier="great">Great</button>
-        <button data-tier="good">Good</button>
-      </div>
-      <div id="questions"></div>
-    </section>
-
     <!-- ---------------------------------------------------- SETTINGS -->
     <section class="view" id="view-settings">
       <h1>Settings</h1>
@@ -182,8 +121,20 @@
           <label class="field"><span>Full name</span><input type="text" id="s-user_name"></label>
           <label class="field"><span>Email</span><input type="email" id="s-user_email"></label>
         </div>
-        <label class="field"><span>Resume path (attached to every outreach draft)</span>
-          <input type="text" id="s-resume_path" placeholder="/Users/you/Documents/Resume.pdf"></label>
+        <div class="field" style="margin-bottom:12px">
+          <span class="field-label">Resume (attached to outreach and nudge drafts)</span>
+          <div class="row" style="gap:8px">
+            <label class="btn gold sm" style="cursor:pointer;margin:0">
+              <span id="s-resume-btn-label">Upload your resume</span>
+              <input type="file" accept="application/pdf,.pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                     id="s-resume-file" style="display:none">
+            </label>
+            <button class="btn ghost sm" id="btn-resume-open" style="display:none">Open</button>
+            <button class="btn ghost sm" id="btn-resume-remove" style="display:none">Remove</button>
+            <span class="small faint" id="s-resume-note" style="flex:1;min-width:200px">PDF or Word.
+              The app keeps its own copy, so it can always attach it.</span>
+          </div>
+        </div>
         <label class="field"><span>Time zone</span><input type="text" id="s-timezone" placeholder="America/New_York"></label>
         <label class="field"><span>Target firms (comma separated)</span>
           <textarea id="s-target_firms" rows="2" style="font-family:var(--sans);font-size:13px"></textarea></label>
@@ -209,7 +160,7 @@
         </div>
         <label class="field"><span>One line on your pre-MBA background (used verbatim)</span>
           <textarea id="s-user_pitch" rows="2" style="font-family:var(--sans);font-size:13px"
-            placeholder="Before business school, I was a software engineer at Flipkart, where I most recently led an 8-member development team."></textarea></label>
+            placeholder="Before business school, I was a product analyst at a fintech startup, where I most recently led pricing for our lending product."></textarea></label>
         <button class="btn" id="btn-save-pitch">Save background</button>
       </div>
 
@@ -244,7 +195,8 @@
 <div class="scrim" id="scrim"></div>
 <aside class="drawer" id="drawer">
   <div class="drawer-head row between">
-    <div><h3 id="d-name" style="margin:0">—</h3><div class="small muted" id="d-sub"></div></div>
+    <div><h3 id="d-name" style="margin:0">—</h3><div class="small muted" id="d-sub"></div>
+      <div id="d-chat-time"></div></div>
     <button class="btn ghost" id="d-close">✕</button>
   </div>
   <div class="drawer-body" id="drawer-body"></div>

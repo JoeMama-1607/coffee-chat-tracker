@@ -5,15 +5,14 @@ const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
 let STATE = {
   people: [], settings: {}, statuses: [], actions: [], coverage: [], questions: [],
-  chats: { current: [], upcoming: [], expired: [] },
+  chats: { current: [], upcoming: [] },
 };
-let SLOTS = null;          // last generated availability
 let CURRENT = null;        // person open in the drawer
 
 const STATUS_TONE = {
   uninitiated: '', outreach_sent: 'warn', awaiting_reply: 'warn',
   scheduled: 'gold', chat_done: 'ok', thankyou_sent: 'ok',
-  nurturing: 'ok', no_response: 'bad',
+  no_response: 'bad',
 };
 
 /* ------------------------------------------------------------- plumbing */
@@ -139,6 +138,14 @@ function dateLabel(value) {
   return stamp;
 }
 
+function chatTimeLabel(value) {
+  if (!value) return '';
+  const d = new Date(value);
+  if (isNaN(d)) return '';
+  return d.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })
+    + ' at ' + d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+}
+
 /* ------------------------------------------------------------ rendering */
 
 async function refresh() {
@@ -147,7 +154,6 @@ async function refresh() {
   renderPipeline();
   renderConnections();
   fillSettings();
-  renderPrep();
   updateNavCounts();
   if (CURRENT) openPerson(CURRENT.id, true);
 }
@@ -189,7 +195,7 @@ function updateNavCounts() {
 function renderToday() {
   const people = STATE.people;
   const count = key => people.filter(p => p.status === key).length;
-  const chatted = people.filter(p => ['chat_done', 'thankyou_sent', 'nurturing'].includes(p.status)).length;
+  const chatted = people.filter(p => ['chat_done', 'thankyou_sent'].includes(p.status)).length;
   const overdue = STATE.actions.filter(a => a.urgency === 'overdue').length;
 
   $('#stats').innerHTML = [
@@ -217,6 +223,7 @@ function renderToday() {
       <div class="grow">
         <span class="who">${esc(a.name)}</span>
         <span class="muted small">${a.firm ? ' · ' + esc(a.firm) : ''}</span>
+        ${a.tier === 'A' ? '<span class="chip gold" style="margin-left:6px">Tier A</span>' : ''}
         <div class="detail">${esc(a.label)} — ${esc(a.detail)}</div>
       </div>
       ${a.kind === 'thankyou' ? `<button class="btn gold sm" data-draft="thankyou" data-id="${a.person_id}">Draft thank-you</button>` : ''}
@@ -232,9 +239,10 @@ function renderToday() {
   $('#action-bin').innerHTML = binned.length ? `
     <details class="paste-box" style="margin-top:14px">
       <summary>Bin — ${binned.length} item${binned.length === 1 ? '' : 's'} ticked off</summary>
-      <p class="small muted" style="margin:10px 0">Ticked off for today only. Put
-        one back at any point, and when you close the app the bin is emptied —
-        anything still outstanding is back on the list next time you open it.</p>
+      <p class="small muted" style="margin:10px 0">Ticked off stays ticked off — it
+        won't come back on its own. Put one back at any point; the list below
+        only covers what you ticked off this session, and starts empty again
+        next time you open the app.</p>
       ${binned.map(b => `
         <div class="action low">
           <div class="grow">
@@ -245,7 +253,7 @@ function renderToday() {
         </div>`).join('')}
     </details>` : '';
 
-  const chats = STATE.chats || { current: [], upcoming: [], expired: [] };
+  const chats = STATE.chats || { current: [], upcoming: [] };
 
   // Happening now — from 15 minutes before the start until 30 minutes after it.
   $('#current-chat').innerHTML = chats.current.length ? chats.current.map(c => {
@@ -278,27 +286,11 @@ function renderToday() {
     : `<div class="card empty small">No chats on the calendar yet. Set a date on a
         person once they confirm.</div>`;
 
-  // Been and gone. The thank-you clock is the only thing still running here.
-  $('#expired-chats').innerHTML = chats.expired.length ? `
-    <h2>Expired chats</h2>
-    ${chats.expired.map(e => `
-      <div class="action${e.thankyou_sent ? '' : ' overdue'}">
-        <div class="grow">
-          <span class="who">${esc(e.name)}</span>
-          <span class="muted small">${e.firm ? ' · ' + esc(e.firm) : ''}</span>
-          <div class="detail">${esc(e.when_label)} — ${e.thankyou_sent
-            ? 'thank-you sent' : 'no thank-you note yet'}</div>
-        </div>
-        ${e.thankyou_sent ? '' :
-          `<button class="btn gold sm" data-draft="thankyou" data-id="${e.person_id}">Draft thank-you</button>`}
-        <button class="btn sm" data-open="${e.person_id}">Open</button>
-      </div>`).join('')}` : '';
-
   $('#coverage').innerHTML = STATE.coverage.length ? STATE.coverage.map(c => {
     const total = Math.max(c.total, 1);
     const pct = n => (n / total * 100).toFixed(1) + '%';
     return `<div class="cov">
-      <div>${esc(c.firm)} ${c.is_target ? '<span class="chip gold">target</span>' : ''}</div>
+      <div>${esc(c.firm)}</div>
       <div class="bar">
         <span class="done" style="width:${pct(c.chatted)}"></span>
         <span class="sched" style="width:${pct(c.scheduled)}"></span>
@@ -341,13 +333,13 @@ function renderPipeline() {
   $('#people-rows').innerHTML = rows.map(p => `
     <tr data-id="${p.id}">
       <td class="name" data-open="${p.id}">${esc(p.name)}
-        ${p.is_alum ? '<span class="chip ok" style="margin-left:5px">alum</span>' : ''}</td>
-      <td>${esc(p.firm || '—')}</td>
-      <td class="muted">${esc(p.role || '—')}</td>
+        ${p.is_alum ? '' : '<span class="chip warn" style="margin-left:5px">not alum</span>'}</td>
+      <td data-open="${p.id}">${esc(p.firm || '—')}</td>
+      <td class="muted" data-open="${p.id}">${esc(p.role || '—')}</td>
       <td><select data-status="${p.id}">${STATE.statuses.map(s =>
         `<option value="${s.key}"${s.key === p.status ? ' selected' : ''}>${esc(s.label)}</option>`).join('')}</select></td>
-      <td class="muted small">${dateLabel(p.last_outbound_at || p.first_contact_at)}</td>
-      <td class="muted small">${p.chat_at ? dateLabel(p.chat_at) : '—'}</td>
+      <td class="muted small" data-open="${p.id}">${dateLabel(p.last_outbound_at || p.first_contact_at)}</td>
+      <td class="muted small" data-open="${p.id}">${p.chat_at ? dateLabel(p.chat_at) : '—'}</td>
       <td><button class="btn ghost sm" data-open="${p.id}">›</button></td>
     </tr>`).join('');
 
@@ -355,28 +347,98 @@ function renderPipeline() {
     `<div class="card empty" style="margin-top:14px"><div class="big">☕</div>
       ${STATE.people.length ? 'Nothing matches those filters.'
         : 'No one here yet. Start with second-years and younger consultants — they say yes most.'}</div>`;
+
+  renderPipelineTree();
 }
 
-function renderPrep() {
-  $('#call-structure').innerHTML = [
-    ['Before', 'Research them and the firm. Send the request with your resume and three hour-long slots. Once confirmed, send a calendar invite with an agenda.'],
-    ['First 2 minutes', 'Small talk. Make it personal. Reference something specific they have said or done.'],
-    ['Set the structure', '"Thank you for taking the time — I\'d like to introduce myself and then hear more about your experience. Does that work for you?"'],
-    ['Resume walk', '90 seconds to 2 minutes. Thread your history into why consulting.'],
-    ['Q&A', 'Tailor to their background. Follow the flow rather than your list.'],
-    ['After', 'Thank-you note inside 24 hours with specifics. Contact any introductions within 24 hours. Log what you learned.'],
-  ].map(([k, v]) => `<div style="display:grid;grid-template-columns:130px 1fr;gap:14px;padding:8px 0;border-bottom:1px solid var(--border)">
-      <div style="font-weight:600;color:var(--navy-700)">${k}</div><div class="muted">${esc(v)}</div></div>`).join('')
-    .replace(/border-bottom:1px solid var\(--border\)"><div style="font-weight:600;color:var\(--navy-700\)">After/, 'border-bottom:0"><div style="font-weight:600;color:var(--navy-700)">After');
+/* Who you've talked to, grouped by company, each company's own referral
+   chains nested inside it — a McKinsey contact introducing you to another
+   McKinsey person nests under them; a referral across firms just starts its
+   own root in the new firm's tree, since that's a separate relationship. */
+let TREE_MINIMIZED = false;
+const TREE_COLLAPSED_FIRMS = new Set();
+const PRIORITY_FIRMS = ['mckinsey', 'bain', 'bcg', 'pwc', 'ey', 'kearney'];
+const STATUS_DOT = {
+  outreach_sent: 'var(--warn)', awaiting_reply: 'var(--warn)',
+  scheduled: 'var(--gold-500)',
+  chat_done: 'var(--ok)', thankyou_sent: 'var(--ok)',
+};
 
-  const tier = $('#q-tabs button.active').dataset.tier;
-  const list = STATE.questions.filter(q => !tier || q.tier === tier);
-  $('#questions').innerHTML = list.map((q, i) => `
-    <div class="qbank-item ${q.tier}">
-      <div class="grow" style="flex:1">${esc(q.text)}</div>
-      <button class="btn ghost sm" data-copy-q="${i}">Copy</button>
-    </div>`).join('');
-  $('#questions').dataset.list = JSON.stringify(list.map(q => q.text));
+function renderPipelineTree() {
+  const box = $('#pipeline-tree');
+  if (!box) return;
+  const toggle = $('#tree-toggle');
+  if (toggle) toggle.textContent = TREE_MINIMIZED ? 'Show tree' : 'Hide tree';
+  box.style.display = TREE_MINIMIZED ? 'none' : '';
+  if (TREE_MINIMIZED) return;
+
+  // A firm's tree is for people you're actually tracking with something to
+  // show — no LinkedIn on file yet, you haven't reached out at all, or you've
+  // given up on them, and there's nothing here worth a branch.
+  const HIDDEN_TREE_STATUS = new Set(['uninitiated', 'no_response']);
+  const eligible = STATE.people.filter(p =>
+    !HIDDEN_TREE_STATUS.has(p.status) && (p.linkedin_raw || '').trim());
+
+  if (!eligible.length) {
+    box.innerHTML = `<div class="card empty small">Nobody to show yet — a person
+      needs a LinkedIn profile on file (and a status past "Uninitiated", other
+      than "No response") to appear in the tree.</div>`;
+    return;
+  }
+
+  const byFirm = new Map();
+  eligible.forEach(p => {
+    const firm = (p.firm || '').trim() || 'Unassigned';
+    if (!byFirm.has(firm)) byFirm.set(firm, []);
+    byFirm.get(firm).push(p);
+  });
+
+  const recency = (firm) => Math.max(...byFirm.get(firm).map(p =>
+    Date.parse((p.created_at || '').replace(' ', 'T')) || 0));
+
+  const firms = [...byFirm.keys()].sort((a, b) => {
+    const ai = PRIORITY_FIRMS.indexOf(a.toLowerCase());
+    const bi = PRIORITY_FIRMS.indexOf(b.toLowerCase());
+    if (ai !== -1 || bi !== -1) {
+      if (ai === -1) return 1;
+      if (bi === -1) return -1;
+      return ai - bi;
+    }
+    return recency(b) - recency(a);
+  });
+
+  const renderNode = (p, byId, childrenOf, depth) => {
+    const kids = (childrenOf.get(p.id) || []).slice().sort((a, b) => a.name.localeCompare(b.name));
+    const color = STATUS_DOT[p.status] || 'var(--text-faint)';
+    return `<div class="tree-node" style="margin-left:${depth * 20}px">
+      <span class="tree-dot" style="background:${color}"></span>
+      <button class="btn ghost sm" data-open="${p.id}">${esc(p.name)}</button>
+      <span class="small muted">${esc(statusLabel(p.status))}${p.role ? ' · ' + esc(p.role) : ''}</span>
+      ${kids.map(k => renderNode(k, byId, childrenOf, depth + 1)).join('')}
+    </div>`;
+  };
+
+  box.innerHTML = firms.map(firm => {
+    const members = byFirm.get(firm);
+    const byId = new Map(members.map(p => [p.id, p]));
+    const childrenOf = new Map();
+    members.forEach(p => {
+      if (p.referred_by && byId.has(p.referred_by)) {
+        if (!childrenOf.has(p.referred_by)) childrenOf.set(p.referred_by, []);
+        childrenOf.get(p.referred_by).push(p);
+      }
+    });
+    const roots = members.filter(p => !(p.referred_by && byId.has(p.referred_by)))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const isOpen = !TREE_COLLAPSED_FIRMS.has(firm);
+
+    return `<details class="paste-box tree-firm"${isOpen ? ' open' : ''} data-firm="${esc(firm)}">
+      <summary>${esc(firm)} <span class="small faint">(${members.length})</span></summary>
+      <div style="margin-top:8px">
+        ${roots.map(r => renderNode(r, byId, childrenOf, 0)).join('')}
+      </div>
+    </details>`;
+  }).join('');
 }
 
 /* -------------------------------------------------------------- drawer */
@@ -388,24 +450,32 @@ async function openPerson(id, quiet = false) {
   $('#d-name').textContent = person.name;
   $('#d-sub').innerHTML = `${esc(person.role || '')}${person.role && person.firm ? ' · ' : ''}${esc(person.firm || '')}
     <span class="chip ${STATUS_TONE[person.status] || ''}" style="margin-left:6px">${esc(statusLabel(person.status))}</span>`;
+  $('#d-chat-time').textContent = person.chat_at ? '☕ ' + chatTimeLabel(person.chat_at) : '';
 
   const f = (id_, label, value, type = 'text') =>
     `<label class="field"><span>${label}</span><input type="${type}" data-f="${id_}" value="${esc(value || '')}"></label>`;
 
-  // What every draft for this person will offer, until it is picked again.
+  // What every draft for this person will offer, until it is picked again —
+  // and, once they've said yes, which one of these was actually accepted.
   let saved = null;
   try { saved = JSON.parse(person.offered_slots || 'null'); } catch (e) { saved = null; }
-  const savedLines = (saved && saved.lines) || [];
-  const stale = ((saved && saved.days) || [])
-    .filter(d => d.date && d.date < new Date().toISOString().slice(0, 10)).length;
+  const savedDays = (saved && saved.days) || [];
+  const today = new Date().toISOString().slice(0, 10);
+  const savedWindows = [];
+  savedDays.forEach(day => (day.windows || []).forEach(w => savedWindows.push({ day, w })));
+  const stale = savedDays.filter(d => d.date && d.date < today).length;
 
-  const savedBlock = savedLines.length ? `
+  const savedBlock = savedWindows.length ? `
     <div class="card" style="margin-bottom:16px;padding:12px 14px">
       <div class="row between" style="margin-bottom:6px">
         <strong style="font-size:13px">Slots offered to ${esc(person.name.split(' ')[0])}</strong>
         <button class="btn ghost sm" id="d-clear-slots">Clear</button>
       </div>
-      ${savedLines.map(l => `<div class="slotline">• ${esc(l)}</div>`).join('')}
+      ${savedWindows.map(({ day, w }) => {
+        const passed = day.date && day.date < today;
+        return `<div class="slotline"${passed ? ' style="color:var(--text-faint);text-decoration:line-through"' : ''}>
+          ${esc(day.label)}: ${esc(w.text)}</div>`;
+      }).join('')}
       ${stale ? `<div class="small" style="color:var(--warn);margin-top:6px">
         ${stale} of these ${stale === 1 ? 'has' : 'have'} already passed — pick again
         before the next draft.</div>` : ''}
@@ -413,12 +483,37 @@ async function openPerson(id, quiet = false) {
         availability${person.offered_slots_at ? ' · picked ' + dateLabel(person.offered_slots_at) : ''}.</div>
     </div>` : '';
 
+  // Once slots are out and the outreach is actually sent, this is where you
+  // record whichever one they actually said yes to — typed in, not ticked,
+  // since the real answer rarely matches a suggested window exactly.
+  const showConfirmBox = savedWindows.length > 0
+    && ['outreach_sent', 'awaiting_reply'].includes(person.status);
+  const confirmBox = showConfirmBox ? `
+    <div class="card" style="margin-bottom:16px;padding:12px 14px">
+      <div style="font-size:13px;font-weight:650;margin-bottom:8px">
+        What time did you land on?</div>
+      <div class="row" style="gap:8px">
+        <input type="date" id="d-confirm-date" style="max-width:150px">
+        <input type="time" id="d-confirm-start" style="max-width:110px">
+        <span class="small muted">to</span>
+        <input type="time" id="d-confirm-end" style="max-width:110px">
+        <button class="btn gold sm" id="d-confirm-btn">Confirm</button>
+      </div>
+      <p class="small faint" style="margin:8px 0 0">Doesn't need to match anything
+        above — enter whatever you actually agreed on. This sets the chat date,
+        moves them to Chat scheduled, and downloads a calendar file that confirms
+        it and cancels the other holds.</p>
+    </div>` : '';
+
+  const hasProfile = !!(person.linkedin_raw || '').trim();
+  const needsLinkedinTitle = hasProfile ? '' : ' title="Upload their LinkedIn profile first — see Prep sheet"';
+
   $('#drawer-body').innerHTML = `
     <div class="row" style="margin-bottom:16px">
-      <button class="btn primary sm" data-draft="outreach" data-id="${person.id}">Draft outreach</button>
-      <button class="btn sm" data-draft="followup" data-id="${person.id}">Draft nudge</button>
-      <button class="btn gold sm" data-draft="thankyou" data-id="${person.id}">Draft thank-you</button>
-      <button class="btn sm" data-prep="${person.id}">Prep sheet${person.linkedin_raw ? ' ✓' : ''}</button>
+      <button class="btn primary sm" data-prep="${person.id}">Prep sheet${hasProfile ? ' ✓' : ' — start here'}</button>
+      <button class="btn ${hasProfile ? 'gold' : 'ghost'} sm" data-draft="outreach" data-id="${person.id}"${needsLinkedinTitle}>Draft outreach</button>
+      <button class="btn ${hasProfile ? '' : 'ghost'} sm" data-draft="followup" data-id="${person.id}"${needsLinkedinTitle}>Draft nudge</button>
+      <button class="btn ${hasProfile ? 'gold' : 'ghost'} sm" data-draft="thankyou" data-id="${person.id}"${needsLinkedinTitle}>Draft thank-you</button>
       <button class="btn sm" data-slots="${person.id}">Suggest slots</button>
     </div>
 
@@ -429,8 +524,7 @@ async function openPerson(id, quiet = false) {
           <input type="file" accept="application/pdf,.pdf" id="d-profile-pdf"
                  data-person="${person.id}" style="display:none">
         </label>
-        ${person.profile_pdf ? `<a class="btn ghost sm" href="/api/profile-pdf/${person.id}"
-            target="_blank" rel="noreferrer">Open stored PDF</a>` : ''}
+        ${person.profile_pdf ? `<a class="btn ghost sm" href="#" data-stored-file="/api/profile-pdf/${person.id}">Open stored PDF</a>` : ''}
         <span class="small faint" id="d-pdf-note" style="flex:1;min-width:200px">
           ${person.linkedin_raw
             ? 'Profile loaded — the prep sheet and outreach draft compare it against yours.'
@@ -440,6 +534,7 @@ async function openPerson(id, quiet = false) {
     </div>
 
     ${savedBlock}
+    ${confirmBox}
 
     <div class="grid-2">
       ${f('name', 'Name', person.name)}
@@ -469,10 +564,14 @@ async function openPerson(id, quiet = false) {
           `<option value="${p.id}"${p.id === person.referred_by ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>
     </div>
     <div class="grid-2">
-      ${f('next_action', 'Next action', person.next_action)}
-      ${f('next_action_date', 'Due', (person.next_action_date || '').slice(0, 10), 'date')}
+      ${f('source', 'How you found them', person.source)}
+      <label class="field"><span>Reached via</span>
+        <select data-f="contact_channel">
+          <option value=""${!person.contact_channel ? ' selected' : ''}>—</option>
+          <option value="email"${person.contact_channel === 'email' ? ' selected' : ''}>Email</option>
+          <option value="linkedin"${person.contact_channel === 'linkedin' ? ' selected' : ''}>LinkedIn</option>
+        </select></label>
     </div>
-    ${f('source', 'How you found them', person.source)}
 
     <div class="row" style="margin:4px 0 20px">
       <span class="small muted" id="d-savestate">Every field saves as you leave it</span>
@@ -585,6 +684,12 @@ async function openDraft(personId, kind, slotLines) {
     draft = await api('/api/draft', 'POST', payload);
   } catch (e) { closeModal(); return toast(e.message, true); }
 
+  if (draft.needs_linkedin) {
+    closeModal();
+    toast(draft.error || 'Upload their LinkedIn profile before drafting anything for them', true);
+    return openPrep(personId);
+  }
+
   const gapNote = draft.unfilled && draft.unfilled.length
     ? `<div class="banner warn"><strong>${draft.unfilled.length} thing${draft.unfilled.length > 1 ? 's' : ''} still to write.</strong>
         Everything in [square brackets] is a part that has to sound like you. A draft
@@ -681,14 +786,12 @@ function renderPrepSheet(prep) {
   if (!prep.has_profile) {
     return `
       ${prep.parsed_nothing ? `<div class="banner warn">That paste didn't contain anything
-        recognisable as work history. Make sure the Experience section is included —
-        or just work from the general questions below.</div>` : ''}
-      ${pasteBox}
-      <div class="banner info">Without a profile these questions are solid but generic.
-        Paste the profile above and they become specific to ${esc(p.name)}.</div>
-      ${prepQuestionsHtml(prep)}
-      ${prepFlowHtml(prep)}
-      ${prepDownloadHtml(p)}`;
+        recognisable as work history. Make sure the Experience section is included.</div>` : ''}
+      <div class="banner info">Nothing built yet — upload ${esc(p.name.split(' ')[0])}'s
+        LinkedIn profile below and the summary, career story, timeline and tailored
+        questions all come from it. Until then there's nothing here to build a sheet
+        from, and no drafts can go out for them either.</div>
+      ${pasteBox}`;
   }
 
   const signals = prep.signals.length
@@ -734,6 +837,16 @@ function renderPrepSheet(prep) {
         what the two of you have in common, which is the strongest thing you can
         open on.</div>`);
 
+  const trajectory = prep.trajectory ? `
+    <h2>Career story</h2>
+    <div class="card" style="line-height:1.65">${esc(prep.trajectory)}</div>` : '';
+
+  const about = prep.about ? `
+    <div class="card" style="margin-top:10px;border-left:3px solid var(--border-strong)">
+      <div class="small muted" style="margin-bottom:4px"><strong>In their own words</strong></div>
+      <div style="line-height:1.6;font-style:italic;color:var(--text-muted)">${esc(prep.about)}</div>
+    </div>` : '';
+
   return `
     <div class="card" style="border-left:3px solid var(--gold-500)">
       <h3 style="margin-bottom:6px">Summary</h3>
@@ -741,6 +854,8 @@ function renderPrepSheet(prep) {
       ${signals}
       <div class="small muted"><strong>First two minutes:</strong> ${esc(prep.opener)}</div>
     </div>
+    ${trajectory}
+    ${about}
     ${common}
     ${timeline}
     ${prepQuestionsHtml(prep)}
@@ -758,6 +873,55 @@ function prepDownloadHtml(person) {
         space for notes during the call.</span>
     </div>`;
 }
+
+/* Files the app keeps (your resume, uploaded LinkedIn PDFs) sit behind the
+   API token, which a plain link cannot send. Fetch them with it instead: PDFs
+   open in a new window, anything else downloads. */
+async function openStoredFile(url) {
+  try {
+    const res = await fetch(url, { headers: { 'X-CCT-Token': window.CCT_TOKEN } });
+    if (!res.ok) {
+      let message = 'That file is not available.';
+      try { message = (await res.json()).error || message; } catch (e) { /* keep default */ }
+      throw new Error(message);
+    }
+    const disposition = res.headers.get('Content-Disposition') || '';
+    const match = disposition.match(/filename="([^"]+)"/);
+    const blob = await res.blob();
+    const blobUrl = URL.createObjectURL(blob);
+    if ((blob.type || '').includes('pdf')) {
+      window.open(blobUrl, '_blank');
+    } else {
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = match ? match[1] : 'file';
+      document.body.appendChild(link); link.click(); link.remove();
+    }
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+document.addEventListener('click', async (ev) => {
+  const opener = ev.target.closest('[data-stored-file]');
+  if (opener) { ev.preventDefault(); return openStoredFile(opener.dataset.storedFile); }
+  if (ev.target.id === 'btn-resume-open') return openStoredFile('/api/resume');
+  if (ev.target.id === 'btn-resume-remove') {
+    const btn = ev.target;
+    if (btn.dataset.armed !== '1') {
+      btn.dataset.armed = '1'; btn.textContent = 'Really remove?';
+      setTimeout(() => { btn.dataset.armed = ''; btn.textContent = 'Remove'; }, 4000);
+      return;
+    }
+    btn.dataset.armed = ''; btn.textContent = 'Remove';
+    try {
+      await api('/api/resume/remove', 'POST', {});
+      toast('Resume removed — drafts will no longer mention one');
+    } catch (e) { toast(e.message, true); }
+    return refresh();
+  }
+});
 
 async function downloadPrepPdf(personId, button) {
   const label = button.textContent;
@@ -916,15 +1080,14 @@ async function openSuggestSlots(personId) {
   }
 
   if (!data.days.length) {
-    $('#m-body').innerHTML = `<div class="card empty">No windows fit your current rules.
-      Widen your working hours, shorten the minimum window, or look further ahead on
-      the <a href="#" data-goto="slots">Slots</a> tab.</div>`;
+    $('#m-body').innerHTML = `<div class="card empty">No conflict-free windows in the
+      next two weeks — the calendar looks fully booked between 9am and 6pm on
+      weekdays. Free up some time and try again.</div>`;
     return;
   }
 
-  // Everything the finder offered starts ticked; unticking is the edit.
+  // Nothing starts ticked — pick whichever windows actually work.
   const picked = new Set();
-  data.days.forEach((day, di) => day.windows.forEach((w, wi) => picked.add(`${di}:${wi}`)));
   paintSuggestSlots(person, data, picked);
 }
 
@@ -965,7 +1128,7 @@ function paintSuggestSlots(person, data, picked) {
   const renderList = () => {
     $('#slot-intro').innerHTML = `Conflict-free windows from your calendar,
       ${data.event_count} event${data.event_count === 1 ? '' : 's'} considered.
-      Untick anything you'd rather not offer ${esc(person.name.split(' ')[0])}.`;
+      Tick whichever work best to offer ${esc(person.name.split(' ')[0])}.`;
     $('#slot-list').innerHTML = data.days.map((day, di) => `
       <div class="slot-day">
         <div class="slot-day-label">${esc(day.label)}</div>
@@ -1000,16 +1163,14 @@ function paintSuggestSlots(person, data, picked) {
       const last = data.days[data.days.length - 1];
       const res = await api('/api/slots', 'POST', { after: last && last.date });
       if (!res.days.length) {
-        note.textContent = 'Nothing further ahead fits your rules — widen the '
-          + 'look-ahead or working hours on the Slots tab.';
+        note.textContent = 'Nothing further ahead fits — the calendar looks '
+          + 'fully booked for those days too.';
       } else {
         // Appended, never prepended: the picked keys are positional, so
         // anything already ticked has to keep the index it was ticked under.
-        const base = data.days.length;
-        res.days.forEach((day, i) => {
-          data.days.push(day);
-          day.windows.forEach((w, wi) => picked.add(`${base + i}:${wi}`));
-        });
+        // The new days arrive unticked, same as the first batch — tick
+        // whichever of them actually work.
+        res.days.forEach(day => data.days.push(day));
         data.event_count = res.event_count;
         note.textContent = `Now showing ${data.days.length} days.`;
         renderList();
@@ -1120,7 +1281,22 @@ function askChatDate(personId, name, existing) {
 }
 
 function openAddPerson() {
+  let pendingPdf = null;   // base64 blob, attached to the person right after it's created
+
   openModal('Add person', `
+    <div class="card" style="margin-bottom:16px;padding:12px 14px">
+      <div class="row" style="gap:8px">
+        <label class="btn gold sm" style="cursor:pointer;margin:0">
+          Upload LinkedIn PDF
+          <input type="file" accept="application/pdf,.pdf" id="n-profile-pdf" style="display:none">
+        </label>
+        <span class="small faint" id="n-pdf-note" style="flex:1;min-width:200px">
+          Optional — fills in what it can below (name, firm, role). Nothing already
+          typed gets overwritten, and everything stays editable before you add them.
+        </span>
+      </div>
+    </div>
+
     <div class="grid-2">
       <label class="field"><span>Name *</span><input type="text" id="n-name"></label>
       <label class="field"><span>Email</span><input type="email" id="n-email"></label>
@@ -1140,7 +1316,7 @@ function openAddPerson() {
       <label class="field"><span>Goizueta alum</span>
         <select id="n-is_alum">
           <option value="0">No</option>
-          <option value="1">Yes</option>
+          <option value="1" selected>Yes</option>
         </select></label>
       <label class="field"><span>Tier</span>
         <select id="n-tier"><option>A</option><option selected>B</option><option>C</option></select></label>
@@ -1152,32 +1328,91 @@ function openAddPerson() {
       opening line in every draft — the app leads with the shared programme instead of
       explaining who you are, which is the strongest opening you have.</p>
 
-    <label class="field"><span>How you found them</span><input type="text" id="n-source"
-      placeholder="GCA board, Goizueta alumni list, LinkedIn, intro from…"></label>
+    <div class="grid-2">
+      <label class="field"><span>How you found them</span><input type="text" id="n-source"
+        placeholder="GCA board, Goizueta alumni list, LinkedIn, intro from…"></label>
+      <label class="field"><span>Reached via</span>
+        <select id="n-contact_channel">
+          <option value="">—</option>
+          <option value="email">Email</option>
+          <option value="linkedin">LinkedIn</option>
+        </select></label>
+    </div>
+    <p class="small faint" style="margin:-2px 0 12px">Without a LinkedIn profile — pasted
+      or uploaded — the prep sheet stays empty and no drafts can go out for them.</p>
     <div class="row"><button class="btn primary" id="n-save">Add</button>
       <span class="small faint">Start with second-years and recent grads — they say yes most.</span></div>`);
+
+  $('#n-profile-pdf').onchange = async () => {
+    const input = $('#n-profile-pdf');
+    const file = input.files && input.files[0];
+    if (!file) return;
+    const note = $('#n-pdf-note');
+    note.textContent = `Reading ${file.name}…`;
+    try {
+      pendingPdf = await fileToBase64(file);
+      const res = await api('/api/profile-pdf', 'POST', { data: pendingPdf });
+      const fill = (id, value) => {
+        const el = $(id);
+        if (el && !el.value.trim() && value) el.value = value;
+      };
+      if (res.parsed && res.parsed.ok) {
+        fill('#n-name', res.suggested.name);
+        fill('#n-firm', res.suggested.firm);
+        fill('#n-role', res.suggested.role);
+        note.textContent = `Read ${res.parsed.roles} role${res.parsed.roles === 1 ? '' : 's'} `
+          + `from ${file.name} — anything already typed above was left alone.`;
+      } else {
+        note.textContent = `${file.name} was read, but no work history was found in it. `
+          + `It'll still attach when you add them.`;
+      }
+    } catch (e) {
+      pendingPdf = null;
+      input.value = '';
+      note.textContent = e.message;
+      toast(e.message, true);
+    }
+  };
 
   $('#n-save').onclick = async () => {
     const name = $('#n-name').value.trim();
     if (!name) return toast('A name is required', true);
-    const res = await api('/api/person', 'POST', {
-      name,
-      email: $('#n-email').value.trim(),
-      firm: $('#n-firm').value.trim(),
-      role: $('#n-role').value.trim(),
-      office: $('#n-office').value.trim(),
-      grad_year: $('#n-grad_year').value.trim(),
-      linkedin: $('#n-linkedin').value.trim(),
-      is_alum: parseInt($('#n-is_alum').value, 10),
-      tier: $('#n-tier').value,
-      status: $('#n-status').value,
-      source: $('#n-source').value.trim(),
-    });
-    closeModal();
-    await refresh();
-    await openPerson(res.person.id);
-    if (res.person.status === 'scheduled') {
-      askChatDate(res.person.id, res.person.name, '');
+    const btn = $('#n-save');
+    btn.disabled = true;
+    try {
+      const res = await api('/api/person', 'POST', {
+        name,
+        email: $('#n-email').value.trim(),
+        firm: $('#n-firm').value.trim(),
+        role: $('#n-role').value.trim(),
+        office: $('#n-office').value.trim(),
+        grad_year: $('#n-grad_year').value.trim(),
+        linkedin: $('#n-linkedin').value.trim(),
+        is_alum: parseInt($('#n-is_alum').value, 10),
+        tier: $('#n-tier').value,
+        status: $('#n-status').value,
+        source: $('#n-source').value.trim(),
+        contact_channel: $('#n-contact_channel').value,
+      });
+      let person = res.person;
+      if (pendingPdf) {
+        try {
+          const attached = await api('/api/profile-pdf', 'POST', {
+            person_id: person.id, data: pendingPdf,
+          });
+          person = attached.person || person;
+        } catch (e) {
+          toast('Added, but the PDF could not be attached — upload it again from their panel', true);
+        }
+      }
+      closeModal();
+      await refresh();
+      await openPerson(person.id);
+      if (person.status === 'scheduled') {
+        askChatDate(person.id, person.name, '');
+      }
+    } finally {
+      btn.disabled = false;
     }
   };
 }
@@ -1210,21 +1445,23 @@ function openImport() {
 
 /* --------------------------------------------------------------- slots */
 
-const DAY_NAMES = [['1', 'Mon'], ['2', 'Tue'], ['3', 'Wed'], ['4', 'Thu'], ['5', 'Fri'], ['6', 'Sat'], ['7', 'Sun']];
-
 function fillSettings() {
   const s = STATE.settings;
   const set = (id, key) => { const el = $(id); if (el) el.value = s[key] != null ? s[key] : ''; };
-  ['user_name', 'user_email', 'user_pitch', 'resume_path', 'timezone',
+  ['user_name', 'user_email', 'user_pitch', 'timezone',
    'target_firms', 'followup_after_days', 'max_followups', 'thankyou_within_hours']
     .forEach(k => set('#s-' + k, k));
-  ['work_start', 'work_end', 'tz_label', 'min_window_minutes', 'buffer_minutes',
-   'lead_days', 'horizon_days', 'slots_wanted', 'max_per_day', 'excluded_calendars']
-    .forEach(k => set('#r-' + k, k));
 
-  const active = new Set((s.work_days || '1,2,3,4,5').split(','));
-  $('#r-work_days').innerHTML = DAY_NAMES.map(([n, label]) =>
-    `<button class="btn sm ${active.has(n) ? 'primary' : ''}" data-day="${n}">${label}</button>`).join('');
+  const resumeNote = $('#s-resume-note');
+  if (resumeNote && !resumeNote.dataset.busy) {
+    const has = !!(s.resume_name || '').trim();
+    resumeNote.innerHTML = has
+      ? `On file: <strong>${esc(s.resume_name)}</strong> — attached to every outreach and nudge.`
+      : 'PDF or Word. The app keeps its own copy, so it can always attach it.';
+    $('#s-resume-btn-label').textContent = has ? 'Replace resume' : 'Upload your resume';
+    $('#btn-resume-open').style.display = has ? '' : 'none';
+    $('#btn-resume-remove').style.display = has ? '' : 'none';
+  }
 
   const note = $('#s-profile-note');
   if (note && !note.dataset.busy) {
@@ -1234,52 +1471,8 @@ function fillSettings() {
   }
 }
 
-function renderSlots() {
-  if (!SLOTS) return;
-  const banner = SLOTS.demo
-    ? `<div class="banner warn">Demo calendar — install on your Mac to read the real one.</div>`
-    : SLOTS.note ? `<div class="banner info">${esc(SLOTS.note)}</div>` : '';
-  $('#slots-banner').innerHTML = banner;
-
-  if (!SLOTS.days.length) {
-    $('#slots-result').innerHTML = `<div class="card empty">No windows fit those rules.
-      Try widening your working hours, shortening the minimum window, or looking
-      further ahead.</div>`;
-    return;
-  }
-
-  const emailBlock = SLOTS.lines.map(l => '• ' + l).join('\n');
-  $('#slots-result').innerHTML = `
-    <div class="card">
-      <div class="row between" style="margin-bottom:12px">
-        <h3 style="margin:0">Offer these</h3>
-        <span class="small faint">${SLOTS.event_count} calendar events considered</span>
-      </div>
-      ${SLOTS.lines.map(l => `<div class="slotline">• ${esc(l)}</div>`).join('')}
-      <div class="row" style="margin-top:12px">
-        <button class="btn primary" id="btn-copy-slots">Copy for email</button>
-        <span class="small faint">Paste straight into an outreach draft.</span>
-      </div>
-      <div class="row" style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
-        <input type="text" id="slots-label" placeholder="Offering these to… (optional)"
-               style="max-width:240px">
-        <button class="btn" id="btn-ics">Download .ics</button>
-        <span class="small faint" style="flex:1;min-width:220px">Adds these windows to
-          Apple Calendar as <strong>busy</strong> holds, so nothing else takes the slot
-          and they won't be offered to anyone else. Delete them if the chat falls through.</span>
-      </div>
-    </div>`;
-  $('#btn-copy-slots').onclick = async () => {
-    toast(await copyText(emailBlock) ? 'Slots copied' : 'Could not copy — select the text manually');
-  };
-  $('#btn-ics').onclick = (ev) => {
-    if (!SLOTS || !SLOTS.days.length) return toast('Find your availability first', true);
-    downloadIcs(SLOTS.days, ($('#slots-label').value || '').trim(), ev.currentTarget);
-  };
-}
-
-/* Shared by the Slots tab and the per-person picker, so a hold written from
-   either place is written the same way. */
+/* Used by the per-person "Suggest slots" picker, so a hold written from
+   there matches what was actually offered. */
 async function downloadIcs(days, holdLabel, button) {
   const events = (days || []).reduce((n, d) => n + d.windows.length, 0);
   if (!events) return toast('Pick at least one window first', true);
@@ -1317,29 +1510,48 @@ async function downloadIcs(days, holdLabel, button) {
   }
 }
 
-async function findSlots() {
-  const btn = $('#btn-find-slots');
-  btn.disabled = true; btn.textContent = 'Reading your calendar…';
+/* Marks one of the offered windows as the one that was actually accepted:
+   sets the chat date, moves the person to Chat scheduled, and hands back a
+   calendar file that confirms that slot and marks every other offered window
+   as cancelled — reusing the same UID each hold was given, so a calendar
+   that still has them can update them in place instead of gaining a
+   duplicate. If yours doesn't, the stale holds are still easy to find and
+   remove by hand (search the hold title, as always). */
+async function confirmSlot(personId, start, end, button) {
+  const label = button.textContent;
+  button.disabled = true;
+  button.textContent = 'Confirming…';
   try {
-    SLOTS = await api('/api/slots', 'POST', {});
-    renderSlots();
+    const res = await fetch('/api/confirm-slot', {
+      method: 'POST',
+      headers: { 'X-CCT-Token': window.CCT_TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ person_id: personId, start, end }),
+    });
+    if (!res.ok) {
+      let message = 'Could not confirm that slot.';
+      try { message = (await res.json()).error || message; } catch (e) { /* keep default */ }
+      throw new Error(message);
+    }
+    const disposition = res.headers.get('Content-Disposition') || '';
+    const match = disposition.match(/filename="([^"]+)"/);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = match ? match[1] : 'Coffee chat confirmed.ics';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    toast('Chat confirmed — calendar file downloaded');
+    await refresh();
+    if (CURRENT && CURRENT.id === personId) await openPerson(personId, true);
   } catch (e) {
-    $('#slots-banner').innerHTML = `<div class="banner bad">${esc(e.message)}</div>`;
-    $('#slots-result').innerHTML = '';
+    toast(e.message, true);
   } finally {
-    btn.disabled = false; btn.textContent = 'Find my availability';
+    button.disabled = false;
+    button.textContent = label;
   }
-}
-
-async function saveRules() {
-  const patch = {};
-  ['work_start', 'work_end', 'tz_label', 'min_window_minutes', 'buffer_minutes',
-   'lead_days', 'horizon_days', 'slots_wanted', 'max_per_day', 'excluded_calendars']
-    .forEach(k => { patch[k] = $('#r-' + k).value; });
-  patch.work_days = $$('#r-work_days button.primary').map(b => b.dataset.day).join(',');
-  await api('/api/settings', 'POST', patch);
-  toast('Rules saved');
-  await refresh();
 }
 
 /* --------------------------------------------------------------- wiring */
@@ -1403,7 +1615,7 @@ async function testOutlook() {
 }
 
 document.addEventListener('click', async (ev) => {
-  const t = ev.target.closest('[data-view], [data-open], [data-prep], [data-slots], [data-pdf], [data-draft], [data-status], [data-day], [data-copy-q], [data-copy-text], [data-delnote], [data-goto], [data-tier], [data-resolve], [data-restore]');
+  const t = ev.target.closest('[data-view], [data-open], [data-prep], [data-slots], [data-pdf], [data-draft], [data-status], [data-copy-text], [data-delnote], [data-goto], [data-resolve], [data-restore]');
   if (!t) return;
 
   if (t.dataset.resolve) {
@@ -1439,20 +1651,6 @@ document.addEventListener('click', async (ev) => {
       ? 'Question copied' : 'Could not copy — select the text manually', false);
   }
 
-  if (t.dataset.day) {
-    t.classList.toggle('primary');
-    return;
-  }
-  if (t.dataset.tier !== undefined && t.parentElement.id === 'q-tabs') {
-    $$('#q-tabs button').forEach(b => b.classList.remove('active'));
-    t.classList.add('active');
-    return renderPrep();
-  }
-  if (t.dataset.copyQ !== undefined) {
-    const list = JSON.parse($('#questions').dataset.list || '[]');
-    const ok = await copyText(list[parseInt(t.dataset.copyQ, 10)]);
-    return toast(ok ? 'Question copied' : 'Could not copy — select the text manually');
-  }
   if (t.dataset.delnote) {
     ev.preventDefault();
     await api('/api/note/' + t.dataset.delnote, 'DELETE');
@@ -1482,6 +1680,25 @@ document.addEventListener('change', async (ev) => {
     }
   }
 
+  // Your resume, from Settings. Uploaded, not pointed at: the app keeps a copy
+  // it is always allowed to read, so the attachment can never silently vanish.
+  if (ev.target.id === 's-resume-file') {
+    const file = ev.target.files && ev.target.files[0];
+    ev.target.value = '';
+    if (!file) return;
+    const note = $('#s-resume-note');
+    note.dataset.busy = '1';
+    note.textContent = `Saving ${file.name}…`;
+    try {
+      const res = await api('/api/resume', 'POST', { name: file.name, data: await fileToBase64(file) });
+      toast(`Resume saved — ${res.name} will be attached to outreach`);
+    } catch (e) {
+      toast(e.message, true);
+    }
+    delete note.dataset.busy;
+    return refresh();
+  }
+
   // Your own LinkedIn PDF, from Settings.
   if (ev.target.id === 's-profile-pdf') {
     const file = ev.target.files && ev.target.files[0];
@@ -1507,9 +1724,7 @@ document.addEventListener('change', async (ev) => {
     }
   }
 
-  // Inline status change from the pipeline table. Moving someone along the
-  // pipeline almost always means something else needs saying too, so the
-  // profile opens rather than leaving you to hunt for it.
+  // Inline status change from the pipeline table.
   const sel = ev.target.closest('[data-status]');
   if (sel) {
     const personId = parseInt(sel.dataset.status, 10);
@@ -1517,7 +1732,6 @@ document.addEventListener('change', async (ev) => {
       const res = await api('/api/person/' + personId, 'POST', { status: sel.value });
       toast('Status updated');
       await refresh();
-      await openPerson(personId);
       if (sel.value === 'scheduled') {
         askChatDate(personId, res.person.name, (res.person.chat_at || '').slice(0, 16));
       }
@@ -1543,14 +1757,28 @@ document.addEventListener('change', (ev) => {
   if (['filter-status', 'filter-firm'].includes(ev.target.id)) renderPipeline();
 });
 
+/* <details> fires "toggle" without bubbling, so this has to listen on the
+   capture phase to catch it delegated from a re-rendered tree. Remembers
+   which firms are collapsed so a refresh triggered elsewhere doesn't close
+   everything the user just opened. */
+document.addEventListener('toggle', (ev) => {
+  const el = ev.target;
+  if (!el.classList || !el.classList.contains('tree-firm')) return;
+  const firm = el.dataset.firm;
+  if (el.open) TREE_COLLAPSED_FIRMS.delete(firm);
+  else TREE_COLLAPSED_FIRMS.add(firm);
+}, true);
+
 document.addEventListener('click', async (ev) => {
   const id = ev.target.id;
   if (id === 'd-close' || id === 'scrim') return closeDrawer();
   if (id === 'm-close' || (ev.target.classList.contains('modal'))) return closeModal();
   if (id === 'btn-add') return openAddPerson();
   if (id === 'btn-import') return openImport();
-  if (id === 'btn-find-slots') return findSlots();
-  if (id === 'btn-save-rules') return saveRules();
+  if (id === 'tree-toggle') {
+    TREE_MINIMIZED = !TREE_MINIMIZED;
+    return renderPipelineTree();
+  }
 
   if (id === 'd-delete') {
     if (!CURRENT) return;
@@ -1589,6 +1817,18 @@ document.addEventListener('click', async (ev) => {
     } catch (e) { return toast(e.message, true); }
   }
 
+  if (id === 'd-confirm-btn') {
+    if (!CURRENT) return;
+    const dateStr = $('#d-confirm-date').value;
+    const startStr = $('#d-confirm-start').value;
+    const endStr = $('#d-confirm-end').value;
+    if (!dateStr || !startStr || !endStr) return toast('Pick a date, start and end time', true);
+    const start = new Date(`${dateStr}T${startStr}`);
+    const end = new Date(`${dateStr}T${endStr}`);
+    if (!(end > start)) return toast('End time must be after the start time', true);
+    return confirmSlot(CURRENT.id, start.toISOString(), end.toISOString(), ev.target);
+  }
+
   if (id === 'note-add') {
     const body = $('#note-body').value.trim();
     if (!body || !CURRENT) return;
@@ -1602,7 +1842,7 @@ document.addEventListener('click', async (ev) => {
   if (id === 'btn-save-settings' || id === 'btn-save-policy') {
     const keys = id === 'btn-save-policy'
       ? ['followup_after_days', 'max_followups', 'thankyou_within_hours']
-      : ['user_name', 'user_email', 'resume_path', 'timezone', 'target_firms'];
+      : ['user_name', 'user_email', 'timezone', 'target_firms'];
     const patch = {};
     keys.forEach(k => { patch[k] = $('#s-' + k).value; });
     try {

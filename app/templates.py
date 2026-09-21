@@ -8,8 +8,8 @@ on the page.
 The rules the wording follows came from feedback on a real outreach email:
 
   * "Hi", never "Hey" — safe with practitioners you have not met.
-  * State the background sharply. "Most recently led an 8-member development
-    team" lands; "focused on managing a team" does not.
+  * State the background sharply. A concrete fact about scope — how many
+    people, what you owned — lands; "focused on managing a team" does not.
   * Ask about *their* experience, never for a plan. "What pitfalls should I
     avoid and what goals should I set" reads as asking a stranger to build your
     recruiting roadmap. "What you wish you'd known early on" gets the same
@@ -116,13 +116,15 @@ def _career_clause(theirs):
     if anchor.get("title"):
         clause += ", most recently as %s %s" % (_article(anchor["title"]), anchor["title"])
 
-    # Where they went next, if it is a real move rather than a summer internship.
+    # Where they went next, if it is a real move rather than a summer
+    # internship — including a move too new for LinkedIn to have a date for
+    # yet, which is exactly when naming it matters most.
     later = [r for r in roles
              if matching._company_key(r.get("company")) != anchor_key
-             and r.get("start") and anchor.get("start")
-             and r["start"] > anchor["start"]]
+             and (r.get("current")
+                  or (r.get("start") and anchor.get("start") and r["start"] > anchor["start"]))]
     if later:
-        later.sort(key=lambda r: r["start"], reverse=True)
+        later.sort(key=lambda r: (bool(r.get("current")), r.get("start") or (0, 0)), reverse=True)
         nxt = later[0]
         if nxt.get("title"):
             clause += ", before moving to %s as %s %s" % (
@@ -245,6 +247,11 @@ def outreach(person, settings, slot_lines, mine=None, theirs=None):
     if person.get("referred_by_name"):
         intro += (" I spoke with %s recently, and they suggested I reach out "
                   "to you." % person["referred_by_name"])
+    elif person.get("is_alum"):
+        # A real, checkable tie you already know about — worth leading with
+        # directly rather than waiting for `ground` to maybe surface it.
+        intro += (" I saw you're a fellow Goizueta alum, which is what made "
+                  "me want to reach out directly.")
     paragraphs.append(intro + " " + opening_line(person, mine, theirs, ground))
 
     pitch = pitch_line(settings, mine)
@@ -266,7 +273,7 @@ def outreach(person, settings, slot_lines, mine=None, theirs=None):
 
     closing = ("Happy to work around whatever is easiest for you, and I'm glad "
                "to do this virtually or on campus.")
-    if (settings.get("resume_path") or "").strip():
+    if settings.get("resume_ready"):
         closing += " I've attached my resume for reference."
     paragraphs.append(closing)
 

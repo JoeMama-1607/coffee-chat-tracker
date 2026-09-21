@@ -1,12 +1,20 @@
 #!/bin/bash
-# Coffee Chat Tracker launcher.
+# Coffee Chat Tracker launcher — the program inside "Coffee Chat Tracker.app".
 #
-# Finds a usable python3, starts the local app server, opens the interface in a
-# clean app window, and stays alive until you close that window.
+# Starts the local app server with the app's own Python, opens the interface
+# in a clean window, and stays alive until you close that window.
 
 set -u
 
-APP_DIR="__APP_DIR__"
+# The app lives inside the CoffeeChatTracker folder, so the folder is simply
+# three levels up from here. Working it out at launch, rather than trusting
+# the path recorded at install time, means moving the whole folder still works.
+HERE="$(cd "$(dirname "$0")" && pwd -P)"
+APP_DIR="$(cd "$HERE/../../.." && pwd -P)"
+if [ ! -f "$APP_DIR/app/server.py" ]; then
+  APP_DIR="__APP_DIR__"
+fi
+
 LOG_DIR="$HOME/Library/Logs"
 LOG="$LOG_DIR/CoffeeChatTracker.log"
 mkdir -p "$LOG_DIR"
@@ -16,19 +24,23 @@ say_error() {
 }
 
 if [ ! -f "$APP_DIR/app/server.py" ]; then
-  say_error "Coffee Chat Tracker cannot find its files.\n\nExpected them at:\n$APP_DIR\n\nIf you moved the CoffeeChatTracker folder, run install.command inside it again."
+  say_error "Coffee Chat Tracker cannot find its files.\n\nKeep the app inside its CoffeeChatTracker folder, and run install.command in that folder again."
   exit 1
 fi
 
+# macOS blocks the app from reading these locations without ever asking, so
+# the app would silently fail to start. Say so plainly instead.
+HOME_REAL="$(cd "$HOME" && pwd -P)"
+case "$APP_DIR/" in
+  "$HOME_REAL/Documents/"*|"$HOME_REAL/Desktop/"*|"$HOME_REAL/Downloads/"*|"$HOME_REAL/Library/Mobile Documents/"*|/Volumes/*)
+    say_error "The CoffeeChatTracker folder is somewhere macOS won't let the app read (Documents, Desktop, Downloads, iCloud Drive or an external drive).\n\nMove the whole folder into your home folder — in Finder, Shift-Command-H opens it — then double-click install.command inside it."
+    exit 1 ;;
+esac
+
 find_python() {
-  local candidates=(
-    /opt/homebrew/bin/python3
-    /usr/local/bin/python3
-    /usr/bin/python3
-    "$(command -v python3 2>/dev/null || true)"
-  )
-  for c in "${candidates[@]}"; do
-    [ -n "$c" ] || continue
+  local c
+  for c in "$APP_DIR/runtime/python/bin/python3" \
+           /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do
     [ -x "$c" ] || continue
     if "$c" -c 'import sys, sqlite3, zoneinfo; sys.exit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then
       echo "$c"
@@ -39,11 +51,11 @@ find_python() {
 }
 
 PY="$(find_python)" || {
-  say_error "Coffee Chat Tracker needs Python 3.9 or newer, which is not installed yet.\n\nOpen Terminal and run:\n\n    xcode-select --install\n\nAccept the prompt, wait for it to finish, then launch the app again."
+  say_error "Coffee Chat Tracker is missing its copy of Python.\n\nDouble-click install.command in the CoffeeChatTracker folder to fetch it, then open the app again."
   exit 1
 }
 
-echo "--- $(date) starting with $PY" >>"$LOG"
+echo "--- $(date) starting with $PY in $APP_DIR" >>"$LOG"
 
 OUT="$(mktemp -t coffeechat)"
 "$PY" "$APP_DIR/app/server.py" >"$OUT" 2>>"$LOG" &
@@ -58,7 +70,7 @@ for _ in $(seq 1 120); do
 done
 
 if [ -z "$URL" ]; then
-  say_error "The app server did not start.\n\nDetails were written to:\n$LOG"
+  say_error "The app did not start.\n\nFor the reason, double-click Run in Terminal.command in the CoffeeChatTracker folder. Details were also written to:\n$LOG"
   rm -f "$OUT"
   exit 1
 fi

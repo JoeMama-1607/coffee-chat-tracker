@@ -124,6 +124,71 @@ def build_slots_ics(windows, label, settings, now=None):
     return "\r\n".join(_fold(line) for line in lines) + "\r\n", count
 
 
+def build_confirm_ics(chosen, cancelled, label, settings, now=None):
+    """One CONFIRMED event for the window that was actually accepted, and a
+    CANCELLED event for every other window that had been offered and held.
+
+    Each reuses the exact UID its hold was given when it was first downloaded
+    (same label, same start/end) — a calendar that kept that identity around
+    can update those entries in place instead of gaining a duplicate. Whether
+    a plain file import actually does that depends on the calendar app; if
+    the stale holds are still sitting there afterwards, they're found and
+    removed the same way as always — by searching the hold's title.
+    """
+    prefix = (settings or {}).get("hold_prefix") or "Coffee chat hold"
+    hold_summary = "%s — %s" % (prefix, label) if label else prefix
+    stamp = _utc(now or dt.datetime.now(dt.timezone.utc))
+
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:" + PRODID,
+        "CALSCALE:GREGORIAN",
+        "METHOD:PUBLISH",
+        "X-WR-CALNAME:" + _escape("Coffee chat — %s" % label if label else "Coffee chat"),
+    ]
+
+    start, end = chosen
+    if start and end and end > start:
+        summary = "Coffee chat — %s" % label if label else "Coffee chat"
+        lines += [
+            "BEGIN:VEVENT",
+            "UID:" + _uid(start, end, hold_summary),   # same identity as the original hold
+            "SEQUENCE:1",
+            "DTSTAMP:" + stamp,
+            "DTSTART:" + _utc(start),
+            "DTEND:" + _utc(end),
+            "SUMMARY:" + _escape(summary),
+            "DESCRIPTION:" + _escape("Confirmed by Coffee Chat Tracker."),
+            "STATUS:CONFIRMED",
+            "TRANSP:OPAQUE",
+            "X-MICROSOFT-CDO-BUSYSTATUS:BUSY",
+            "CATEGORIES:Coffee chats",
+            "END:VEVENT",
+        ]
+
+    for c_start, c_end in cancelled or []:
+        if not c_start or not c_end or c_end <= c_start:
+            continue
+        lines += [
+            "BEGIN:VEVENT",
+            "UID:" + _uid(c_start, c_end, hold_summary),
+            "SEQUENCE:1",
+            "DTSTAMP:" + stamp,
+            "DTSTART:" + _utc(c_start),
+            "DTEND:" + _utc(c_end),
+            "SUMMARY:" + _escape(hold_summary),
+            "DESCRIPTION:" + _escape("Not the slot that was picked — safe to delete."),
+            "STATUS:CANCELLED",
+            "TRANSP:TRANSPARENT",
+            "CATEGORIES:Coffee chats",
+            "END:VEVENT",
+        ]
+
+    lines.append("END:VCALENDAR")
+    return "\r\n".join(_fold(line) for line in lines) + "\r\n"
+
+
 def windows_from_days(days, parse_iso):
     """Flatten the slot finder's day/window structure into datetime pairs."""
     out = []

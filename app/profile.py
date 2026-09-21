@@ -20,7 +20,7 @@ MONTHS = {
 }
 
 SECTION_HEADERS = [
-    "about", "experience", "education", "skills", "licenses & certifications",
+    "about", "summary", "experience", "education", "skills", "licenses & certifications",
     "licenses and certifications", "certifications", "volunteering",
     "volunteer experience", "honors & awards", "honors and awards",
     "projects", "publications", "languages", "recommendations",
@@ -177,11 +177,34 @@ def _looks_like_company(line):
 PLACE_WORDS = re.compile(
     r"^(remote|hybrid|on-?site|greater .+ area|.+ metropolitan area)$", re.I)
 
+# A location with no city — just the country — has no comma, so the general
+# 'has a comma' rule below misses it entirely. That is exactly what
+# mislabelled "United States" as a person's name: the two-capitalised-word
+# pattern that catches a name fits a bare country just as well, and nothing
+# upstream of it recognised the line as a place first.
+COUNTRY_NAMES = {
+    "united states", "united states of america", "usa", "united kingdom", "uk",
+    "canada", "india", "australia", "germany", "france", "spain", "italy",
+    "china", "japan", "south korea", "north korea", "brazil", "mexico",
+    "singapore", "united arab emirates", "uae", "netherlands", "switzerland",
+    "sweden", "ireland", "new zealand", "south africa", "nigeria", "kenya",
+    "egypt", "saudi arabia", "qatar", "kuwait", "bahrain", "oman", "israel",
+    "turkey", "russia", "ukraine", "poland", "portugal", "belgium", "austria",
+    "denmark", "norway", "finland", "iceland", "greece", "czech republic",
+    "hungary", "romania", "hong kong", "taiwan", "vietnam", "thailand",
+    "indonesia", "malaysia", "philippines", "pakistan", "bangladesh",
+    "sri lanka", "nepal", "argentina", "chile", "colombia", "peru", "ecuador",
+    "venezuela", "panama", "costa rica", "jamaica", "morocco", "ghana",
+    "ethiopia", "tanzania", "uganda", "luxembourg", "monaco", "cyprus",
+    "malta", "croatia", "slovenia", "slovakia", "bulgaria", "estonia",
+    "latvia", "lithuania", "serbia",
+}
+
 
 def _looks_like_place(line):
     text, _ = _strip_meta(line)
     text = text.strip()
-    if PLACE_WORDS.match(text):
+    if PLACE_WORDS.match(text) or text.lower() in COUNTRY_NAMES:
         return True
     if _looks_like_company(text):
         return False          # 'Something, Inc.' is an employer, not a city
@@ -582,6 +605,57 @@ def _company_group(roles, company):
     return [r for r in roles if r["company"].lower() == (company or "").lower()]
 
 
+def current_from_person(profile, person):
+    """The firm and role you entered when you added them always describes
+    'now' — a LinkedIn export can be months stale, and nothing on the page
+    can tell that apart from one that was never updated. Whatever you typed
+    wins.
+
+    When the parsed history has a role at that same employer, its own start
+    date carries over unchanged — it just keeps running rather than ending
+    on whatever date LinkedIn last recorded — so an unlisted promotion still
+    sits in the right place on the timeline instead of jumping to the front
+    of the whole company tenure. Total time at the employer (for "4 years at
+    X", the long-tenure signal) is computed separately, over every title
+    there, so it stays accurate regardless. When LinkedIn has no role at
+    that employer at all — a job it has never heard of — the role is added
+    with no start date rather than a guessed one.
+    """
+    roles = list(profile.get("roles") or [])
+    firm = (person.get("firm") or "").strip()
+    if not firm:
+        return roles
+
+    import matching  # lower layer; imported here to avoid a circular import
+    role_title = (person.get("role") or "").strip()
+    firm_key = matching._company_key(firm)
+    matches = [r for r in roles if matching._company_key(r.get("company")) == firm_key]
+
+    if matches:
+        anchor = matches[0]                    # already sorted most-recent-first
+        current = dict(anchor)
+        current.update({
+            "title": role_title or anchor.get("title") or "",
+            "company": firm, "end": None, "current": True,
+            "months": _months_between(anchor.get("start"), None) if anchor.get("start") else None,
+        })
+        match_ids = {id(r) for r in matches}
+        # Same employer, spelled the way you typed it — so tenure totals
+        # (which match on the company string) find every title there, not
+        # just the ones that happen to share LinkedIn's exact spelling.
+        earlier_same_firm = []
+        for r in matches[1:]:
+            r2 = dict(r)
+            r2["company"] = firm
+            earlier_same_firm.append(r2)
+        rest = [r for r in roles if id(r) not in match_ids]
+        return [current] + earlier_same_firm + rest
+
+    current = {"title": role_title, "company": firm, "start": None, "end": None,
+              "current": True, "months": None, "location": ""}
+    return [current] + roles
+
+
 def detect_signals(profile, person, settings):
     """The specific, checkable facts that a question can be hung on."""
     signals = []
@@ -666,6 +740,74 @@ def detect_signals(profile, person, settings):
 
 
 # ---------------------------------------------------------------- summarising
+
+def _role_span(role):
+    """'2022–Present' / '2022–2025' / '2022' — never invents a date that
+    didn't survive parsing."""
+    if not role.get("start"):
+        return ""
+    start_y = role["start"][0]
+    if role.get("current"):
+        return "%d–Present" % start_y
+    if role.get("end"):
+        end_y = role["end"][0]
+        return "%d" % start_y if end_y == start_y else "%d–%d" % (start_y, end_y)
+    return "%d" % start_y
+
+
+def career_trajectory(profile, person):
+    """A chronological read of how they got here — school, then each move, in
+    the order it actually happened.
+
+    `summarise()` answers who they are right now; this answers how they
+    arrived, which is what a half-hour conversation actually has room to
+    explore. Built only from roles and education that survived parsing —
+    where a date is missing it is left out rather than guessed.
+    """
+    roles = [r for r in (profile.get("roles") or []) if r.get("company")]
+    oldest_first = sorted(roles, key=lambda r: r.get("start") or (9999, 1))
+    education = [e for e in (profile.get("education") or [])
+                if (e.get("school") or e.get("detail"))]
+
+    clauses = []
+
+    # LinkedIn lists education most-recent-first, same as experience, so the
+    # earliest-dated degree is the one to open on.
+    dated = [e for e in education if e.get("years")]
+    first_school = dated[-1] if dated else (education[-1] if education else None)
+    if first_school:
+        school = first_school.get("school") or first_school.get("detail")
+        degree = first_school.get("degree")
+        clauses.append(("studied %s at %s" % (degree, school)) if degree
+                       else ("studied at %s" % school))
+
+    prev_key = None
+    for role in oldest_first:
+        title = (role.get("title") or "").strip()
+        company = (role.get("company") or "").strip()
+        key = company.lower()
+        span_note = (" (%s)" % _role_span(role)) if _role_span(role) else ""
+
+        if key == prev_key:
+            clauses.append(("moved up to %s there%s" % (title, span_note)) if title
+                           else ("moved into a new role there%s" % span_note))
+        else:
+            lead = "started their career at" if not clauses else "moved to"
+            clauses.append("%s %s%s%s" % (
+                lead, company,
+                (" as %s %s" % (_an(title), title)) if title else "",
+                span_note,
+            ))
+        prev_key = key
+
+    if not clauses:
+        return ""
+
+    text = clauses[0][0].upper() + clauses[0][1:]
+    for clause in clauses[1:]:
+        text += ", then " + clause
+    return text + "."
+
 
 def summarise(profile, person, signals):
     """Three or four sentences, all of them checkable against the profile."""
@@ -908,27 +1050,27 @@ def prep_sheet(person, settings, mine=None):
     profile = parse(raw) if raw.strip() else {"ok": False, "reason": "missing"}
 
     if not profile.get("ok"):
-        culture = _culture([], person)
-        journey = _journey([], person)
-        opening = opener({}, person, [])
+        # Nothing to build a sheet out of yet — the only thing worth showing
+        # is the prompt to upload it. Generic questions without a profile
+        # behind them read as a script, which is exactly what this app
+        # exists to avoid.
         return {
             "has_profile": False,
             "reason": profile.get("reason", "missing"),
             "linkedin": person.get("linkedin", ""),
             "parsed_nothing": bool(raw.strip()),
-            "opener": opening,
-            "culture": culture,
-            "journey": journey,
-            "tailored": [],
-            "common": [],
-            "flow": build_flow(person, [], culture, journey, opening),
         }
+
+    profile = dict(profile)
+    profile["roles"] = current_from_person(profile, person)
 
     signals = detect_signals(profile, person, settings)
     tailored = _tailored(signals, person, settings)
     culture = _culture(signals, person)
     journey = _journey(signals, person)
     opening = opener(profile, person, signals)
+    trajectory = career_trajectory(profile, person)
+    about = (profile.get("about") or "").strip()
 
     # What the two of you share, and what to do with it in the half hour.
     common = matching.conversation_angles(mine, profile, person) if mine else []
@@ -960,6 +1102,8 @@ def prep_sheet(person, settings, mine=None):
         "headline": profile.get("headline", ""),
         "location": profile.get("location", ""),
         "summary": summarise(profile, person, signals),
+        "trajectory": trajectory,
+        "about": about,
         "signals": [{"key": s["key"], "label": s["label"]} for s in signals],
         "common": common,
         "timeline": timeline,

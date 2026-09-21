@@ -105,6 +105,7 @@ def compute_actions(people, settings, resolved=None):
     for p in people:
         status = p.get("status") or "uninitiated"
         name = p.get("name")
+        tier = (p.get("tier") or "B").strip().upper()
         last_out = iso_date(p.get("last_outbound_at"))
         last_in = iso_date(p.get("last_inbound_at"))
         chat_at = iso_date(p.get("chat_at"))
@@ -120,7 +121,7 @@ def compute_actions(people, settings, resolved=None):
         if chat_at and chat_at <= now and not p.get("thankyou_sent_at"):
             hours = (now - chat_at).total_seconds() / 3600.0
             actions.append({
-                "person_id": p["id"], "name": name, "firm": p.get("firm"),
+                "person_id": p["id"], "name": name, "firm": p.get("firm"), "tier": tier,
                 "kind": "thankyou",
                 "key": action_key("thankyou", p, p.get("chat_at")),
                 "urgency": "overdue" if hours > thankyou_hours else "today",
@@ -137,7 +138,7 @@ def compute_actions(people, settings, resolved=None):
                 sent = int(p.get("followups_sent") or 0)
                 if sent < max_followups:
                     actions.append({
-                        "person_id": p["id"], "name": name, "firm": p.get("firm"),
+                        "person_id": p["id"], "name": name, "firm": p.get("firm"), "tier": tier,
                         "kind": "followup",
                         "key": action_key("followup", p, p.get("last_outbound_at"), sent),
                         "urgency": "overdue" if quiet >= followup_after * 2 else "today",
@@ -146,7 +147,7 @@ def compute_actions(people, settings, resolved=None):
                     })
                 else:
                     actions.append({
-                        "person_id": p["id"], "name": name, "firm": p.get("firm"),
+                        "person_id": p["id"], "name": name, "firm": p.get("firm"), "tier": tier,
                         "kind": "stop",
                         "key": action_key("stop", p, sent),
                         "urgency": "low",
@@ -158,7 +159,7 @@ def compute_actions(people, settings, resolved=None):
         # 3. Replied to you and the ball is in your court
         if last_in and last_out and last_in > last_out and status not in ("scheduled", "chat_done", "thankyou_sent"):
             actions.append({
-                "person_id": p["id"], "name": name, "firm": p.get("firm"),
+                "person_id": p["id"], "name": name, "firm": p.get("firm"), "tier": tier,
                 "kind": "reply",
                 "key": action_key("reply", p, p.get("last_inbound_at")),
                 "urgency": "today",
@@ -166,23 +167,13 @@ def compute_actions(people, settings, resolved=None):
                 "detail": "Reply received %s" % last_in.strftime("%b %d"),
             })
 
-        # 4. Anything you scheduled yourself
-        if p.get("next_action_date"):
-            due = aware(iso_date(p["next_action_date"]))
-            if due and due <= now + dt.timedelta(days=1):
-                actions.append({
-                    "person_id": p["id"], "name": name, "firm": p.get("firm"),
-                    "kind": "custom",
-                    "key": action_key("custom", p, p.get("next_action_date"),
-                                      p.get("next_action")),
-                    "urgency": "overdue" if due < now else "today",
-                    "label": p.get("next_action") or "Follow up",
-                    "detail": "Due %s" % due.strftime("%b %d"),
-                })
-
     actions = [a for a in actions if a.get("key") not in resolved]
     order = {"overdue": 0, "today": 1, "low": 2}
-    actions.sort(key=lambda a: order.get(a["urgency"], 3))
+    tier_order = {"A": 0, "B": 1, "C": 2}
+    # Urgency still comes first — an overdue Tier-C beats a today Tier-A — but
+    # within the same urgency a target-firm contact shouldn't be buried under
+    # everyone you're not actually prioritising.
+    actions.sort(key=lambda a: (order.get(a["urgency"], 3), tier_order.get(a.get("tier"), 1)))
     return actions
 
 
@@ -195,7 +186,7 @@ def firm_coverage(people, settings):
                                       "scheduled": 0, "pending": 0})
         b["total"] += 1
         status = p.get("status")
-        if status in ("chat_done", "thankyou_sent", "nurturing"):
+        if status in ("chat_done", "thankyou_sent"):
             b["chatted"] += 1
         elif status == "scheduled":
             b["scheduled"] += 1
@@ -222,6 +213,31 @@ def _store_pdf(blob, name):
     with open(path, "wb") as fh:
         fh.write(blob)
     return path
+
+
+RESUME_TYPES = {".pdf": "application/pdf",
+                ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
+RESUME_MAX_BYTES = 10 * 1024 * 1024
+
+
+def resume_attachment(settings):
+    """The stored resume copy, if there is one and it can actually be read.
+
+    Everything that mentions or attaches a resume goes through this, so the
+    email never says "I've attached my resume" when nothing would be attached."""
+    path = (settings.get("resume_file") or "").strip()
+    if path and os.path.isfile(path) and os.access(path, os.R_OK):
+        return path
+    return ""
+
+
+def _safe_filename(name, ext):
+    """Keep the name they chose — it is what the recipient sees on the
+    attachment — minus anything that could escape the folder."""
+    base = os.path.basename((name or "").replace("\\", "/"))
+    stem = os.path.splitext(base)[0]
+    stem = "".join(c for c in stem if c.isalnum() or c in " -_.()&,'").strip(" .")
+    return (stem[:80] or "Resume") + ext
 
 
 def _profile_summary(parsed):
@@ -253,7 +269,14 @@ def their_profile(person):
     if not raw:
         return {}
     parsed = profile_reader.parse(raw)
-    return parsed if parsed.get("ok") else {}
+    if not parsed.get("ok"):
+        return {}
+    # The firm and role on the person's own record describe "now" even when
+    # LinkedIn hasn't caught up — same reconciliation the prep sheet applies,
+    # so an outreach draft's career clause doesn't quote a stale title.
+    parsed = dict(parsed)
+    parsed["roles"] = profile_reader.current_from_person(parsed, person)
+    return parsed
 
 
 def stored_slot_lines(person, today=None):
@@ -307,19 +330,23 @@ def roll_finished_chats(people, settings):
 
 
 def chat_buckets(people, settings):
-    """Split every dated chat into what is coming, what is happening, and what
-    has been and gone."""
+    """Split every dated chat into what is coming and what is happening now.
+    A chat past its run time isn't a bucket here — `roll_finished_chats`
+    already moves it to Chat done, and the thank-you clock (in
+    `compute_actions`) is what keeps it visible until that note goes out."""
     tz = availability.get_tz(settings.get("timezone", "America/New_York"))
     now = dt.datetime.now(tz)
     lead = dt.timedelta(minutes=CHAT_LEAD_MINUTES)
     run = dt.timedelta(minutes=CHAT_RUN_MINUTES)
 
-    buckets = {"current": [], "upcoming": [], "expired": []}
+    buckets = {"current": [], "upcoming": []}
     for p in people:
         when = iso_date(p.get("chat_at"))
         if not when:
             continue
         when = when.replace(tzinfo=tz) if not when.tzinfo else when.astimezone(tz)
+        if now >= when + run:
+            continue
         fmt = "%a %b %d, %-I:%M %p" if os.name != "nt" else "%a %b %d, %I:%M %p"
         row = {
             "person_id": p["id"], "name": p.get("name"), "firm": p.get("firm"),
@@ -330,15 +357,11 @@ def chat_buckets(people, settings):
         }
         if now < when - lead:
             buckets["upcoming"].append(row)
-        elif now < when + run:
-            buckets["current"].append(row)
         else:
-            buckets["expired"].append(row)
+            buckets["current"].append(row)
 
     buckets["current"].sort(key=lambda r: r["when"])
     buckets["upcoming"].sort(key=lambda r: r["when"])
-    buckets["expired"].sort(key=lambda r: r["when"], reverse=True)
-    buckets["expired"] = buckets["expired"][:12]
     return buckets
 
 
@@ -438,7 +461,7 @@ def state_payload():
         "settings": settings,
         "people": people,
         "statuses": [{"key": k, "label": l} for k, l in db.STATUSES],
-        "actions": compute_actions(people, settings, db.resolved_keys(SESSION)),
+        "actions": compute_actions(people, settings, db.resolved_keys()),
         "coverage": firm_coverage(people, settings),
         "chats": chat_buckets(people, settings),
         "bin": db.bin_items(SESSION),
@@ -581,6 +604,14 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/state":
             _last_beat[0] = time.time()
             return self._json(state_payload())
+        if path == "/api/resume":
+            stored = resume_attachment(db.get_settings())
+            if not stored:
+                return self._error("No resume uploaded yet.", 404)
+            ext = os.path.splitext(stored)[1].lower()
+            with open(stored, "rb") as fh:
+                return self._file(fh.read(), RESUME_TYPES.get(ext, "application/octet-stream"),
+                                  os.path.basename(stored))
         if path.startswith("/api/profile-pdf/"):
             # Hand back the file that was uploaded, so it can be reopened from
             # the app rather than hunted for in Downloads.
@@ -641,6 +672,52 @@ class Handler(BaseHTTPRequestHandler):
                               "text/calendar; charset=utf-8",
                               "Coffee chat holds.ics")
 
+        if path == "/api/confirm-slot":
+            person = db.get_person(int(body.get("person_id") or 0))
+            if not person:
+                return self._error("person not found", 404)
+            start = availability.parse_iso(body.get("start"))
+            end = availability.parse_iso(body.get("end"))
+            if not start or not end:
+                return self._error("A start and end time are required.", 400)
+
+            # Every window that had been offered, so whichever ones weren't
+            # picked can be marked cancelled on the calendar.
+            offered = []
+            try:
+                saved = json.loads(person.get("offered_slots") or "null")
+            except ValueError:
+                saved = None
+            for day in (saved or {}).get("days", []):
+                for w in day.get("windows", []):
+                    w_start = availability.parse_iso(w.get("start"))
+                    w_end = availability.parse_iso(w.get("end"))
+                    if w_start and w_end:
+                        offered.append((w_start, w_end))
+
+            def same_window(a, b):
+                return (abs((a[0] - b[0]).total_seconds()) < 60
+                        and abs((a[1] - b[1]).total_seconds()) < 60)
+
+            cancelled = [w for w in offered if not same_window(w, (start, end))]
+            text = ics.build_confirm_ics((start, end), cancelled, person.get("name"), settings)
+
+            # Every other place chat_at is read (compute_actions, chat_buckets,
+            # the datetime-local field in the drawer) treats it as naive local
+            # time, not UTC — store it the same way, or it displays and sorts
+            # hours off from what was actually picked.
+            tz = availability.get_tz(settings.get("timezone", "America/New_York"))
+            local_start = start.astimezone(tz).replace(tzinfo=None)
+            patch = {"chat_at": local_start.isoformat(), "offered_slots": "",
+                     "offered_slots_at": None}
+            if person.get("status") not in ("chat_done", "thankyou_sent"):
+                patch["status"] = "scheduled"
+            db.update_person(person["id"], patch)
+
+            safe = "".join(c for c in person["name"] if c.isalnum() or c in " -_").strip() or "chat"
+            return self._file(text.encode("utf-8"), "text/calendar; charset=utf-8",
+                              "Coffee chat confirmed - %s.ics" % safe)
+
         if path == "/api/action/resolve":
             key = (body.get("key") or "").strip()
             if not key:
@@ -684,6 +761,21 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True, "self": True, "text": text,
                                    "parsed": _profile_summary(parsed)})
 
+            if not body.get("person_id"):
+                # No person exists yet — this is Add Person asking what the PDF
+                # says before the record is created. Nothing is stored; the
+                # blob comes back around in a second call once the person has
+                # an id to attach it to.
+                current = (parsed.get("roles") or [{}])[0] if parsed.get("ok") else {}
+                return self._json({
+                    "ok": True, "parsed": _profile_summary(parsed),
+                    "suggested": {
+                        "name": parsed.get("name", "") if parsed.get("ok") else "",
+                        "firm": current.get("company", ""),
+                        "role": current.get("title", ""),
+                    },
+                })
+
             person = db.get_person(int(body["person_id"]))
             if not person:
                 return self._error("person not found", 404)
@@ -699,6 +791,50 @@ class Handler(BaseHTTPRequestHandler):
             person = db.update_person(person["id"], patch)
             return self._json({"ok": True, "person": person,
                                "parsed": _profile_summary(parsed)})
+
+        if path == "/api/resume":
+            # Your resume, uploaded rather than pointed at, so the app keeps a
+            # copy it is always allowed to read.
+            name = body.get("name") or ""
+            ext = os.path.splitext(name)[1].lower()
+            if ext not in RESUME_TYPES:
+                return self._error("Please upload your resume as a PDF or a Word (.docx) file.", 400)
+            try:
+                blob = base64.b64decode(body.get("data") or "")
+            except Exception:
+                return self._error("That file could not be read.", 400)
+            if not blob:
+                return self._error("That file is empty.", 400)
+            if len(blob) > RESUME_MAX_BYTES:
+                return self._error("That file is over 10 MB — too large to attach to an email.", 400)
+            if ext == ".pdf" and not pdfreader.looks_like_pdf(blob):
+                return self._error("That file is not really a PDF.", 400)
+            if ext == ".docx" and not blob.startswith(b"PK"):
+                return self._error("That file is not really a Word document.", 400)
+
+            folder = db.resume_dir()
+            for old in os.listdir(folder):           # one resume at a time
+                try:
+                    os.remove(os.path.join(folder, old))
+                except OSError:
+                    pass
+            filename = _safe_filename(name, ext)
+            stored = os.path.join(folder, filename)
+            with open(stored, "wb") as fh:
+                fh.write(blob)
+            db.save_settings({"resume_file": stored, "resume_name": filename,
+                              "resume_path": ""})
+            return self._json({"ok": True, "name": filename, "bytes": len(blob)})
+
+        if path == "/api/resume/remove":
+            stored = resume_attachment(settings)
+            if stored:
+                try:
+                    os.remove(stored)
+                except OSError:
+                    pass
+            db.save_settings({"resume_file": "", "resume_name": "", "resume_path": ""})
+            return self._json({"ok": True})
 
         if path == "/api/offered-slots":
             # What you picked for one person, kept so the draft you write
@@ -790,9 +926,16 @@ class Handler(BaseHTTPRequestHandler):
         return sheet
 
     def _draft(self, body, settings):
+        # Tell the email writer whether a resume will really go with it.
+        settings = dict(settings, resume_ready="1" if resume_attachment(settings) else "")
         person = db.get_person(int(body["person_id"]))
         if not person:
             return self._error("person not found", 404)
+        if not (person.get("linkedin_raw") or "").strip():
+            return self._json({
+                "ok": False, "needs_linkedin": True,
+                "error": "Upload their LinkedIn profile before drafting anything for them.",
+            })
 
         kind = body.get("kind", "outreach")
         lines = body.get("slot_lines")
@@ -825,7 +968,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": False, "needs_edit": True, "unfilled": remaining,
                                "subject": subject, "body": text})
 
-        attachment = settings.get("resume_path", "") if kind != "thankyou" else ""
+        attachment = resume_attachment(settings) if kind != "thankyou" else ""
         result = macos.draft_email(person.get("email", ""), person.get("name", ""),
                                    subject, text, attachment)
 
@@ -854,9 +997,6 @@ def main():
     args = parser.parse_args()
 
     db.init()
-    # Ticking something off lasts for one run of the app. Anything binned by an
-    # earlier run is dropped now, so whatever is still outstanding comes back.
-    db.purge_old_resolutions(SESSION)
 
     httpd = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     _server[0] = httpd

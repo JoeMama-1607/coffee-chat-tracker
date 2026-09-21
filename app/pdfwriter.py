@@ -337,10 +337,20 @@ def build_prep_pdf(prep, settings):
     else:
         canvas.heading("No profile on file")
         canvas.paragraph(
-            "No LinkedIn profile has been pasted in for %s yet, so these questions "
-            "are the general set rather than ones built from their career. Paste "
-            "their profile into the prep sheet in the app to get questions that "
-            "name specifics." % name, size=10, leading=14.5, color=GREY)
+            "No LinkedIn profile has been uploaded for %s yet, so there is nothing "
+            "to build a prep sheet from. Upload it in the app to get a summary, a "
+            "career trajectory, and questions that name specifics." % name,
+            size=10, leading=14.5, color=GREY)
+
+    # ---- career story
+    if prep.get("trajectory"):
+        canvas.heading("Career story")
+        canvas.paragraph(prep["trajectory"], size=10.5, leading=15)
+
+    if prep.get("about"):
+        canvas.gap(4)
+        canvas.paragraph("In their own words:", font=BOLD, size=9, color=GREY, leading=13)
+        canvas.paragraph(prep["about"], font=ITALIC, size=9.8, color=GREY, leading=14)
 
     # ---- opener
     if prep.get("opener"):

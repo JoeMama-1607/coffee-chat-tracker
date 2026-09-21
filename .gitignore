@@ -12,3 +12,6 @@ __pycache__/
 Coffee Chat Tracker.app/
 build/
 *.log
+
+# The app's private Python, downloaded by install.command on each Mac.
+runtime/

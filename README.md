@@ -12,20 +12,31 @@ lives in one SQLite file at
 
 ## Install
 
-1. Double-click **`install.command`** in this folder.
-   - If macOS says it can't be opened because it's from an unidentified
-     developer, right-click it → **Open** → **Open**.
-   - It checks for Python, builds the app, and puts
-     **Coffee Chat Tracker.app** in your `~/Applications` folder.
-2. Open the app from `~/Applications` (or Spotlight).
-3. Go to **Settings**, fill in your name, program and resume path, and save.
+1. **Put this folder in your home folder** — for example `~/CoffeeChatTracker`.
+   Not Desktop, Documents, Downloads or iCloud Drive: macOS silently blocks
+   the app from reading files there and it will not start. The installer
+   checks this, and offers to move the folder for you if it's in the wrong place.
+2. Double-click **`install.command`**.
+   - The first time, macOS may say it can't be opened because it's from an
+     unidentified developer. Open **System Settings → Privacy & Security**,
+     scroll down, click **Open Anyway** next to the message about
+     install.command, and confirm.
+   - It downloads the app's own copy of Python (about 25 MB, verified by
+     checksum) into a `runtime/` folder here. You do not need Python installed,
+     and it never touches any Python already on your Mac. Running the installer
+     again later updates that copy if a newer one is pinned.
+   - It builds **Coffee Chat Tracker.app** inside this folder.
+3. Open the app from this folder, or search for it in Spotlight.
+4. Go to **Settings**: fill in your name and email, upload your resume under
+   **You**, and under **Your background** upload your own LinkedIn PDF (on
+   LinkedIn: your profile → More → Save to PDF).
 
-If the installer says Python is missing, run this in Terminal, let it finish,
-then run the installer again:
+Running `install.command` again is safe: if the app is already set up it just
+says so. Type `reinstall` at its prompt to rebuild it anyway — for instance
+after replacing the app's files with a newer version.
 
-```
-xcode-select --install
-```
+If the app ever seems not to open, double-click **`Run in Terminal.command`**:
+it runs the app with its log on screen, so you can see what went wrong.
 
 ### Permissions you'll be asked for
 
@@ -126,8 +137,12 @@ the app counts how many are left before you open it. That friction is
 deliberate — the deck's warning is that everybody can tell when they've received
 a template, and a draft where only the name changed is exactly that.
 
-The outreach draft attaches your resume automatically, using the path in
-Settings.
+Upload your resume once in **Settings → You** (PDF or Word). The app keeps its
+own copy next to its data — not a link to wherever the file lives — because
+macOS silently stops the app reading Documents, Desktop and Downloads, which is
+where most resumes sit. Outreach and nudge drafts opened in Outlook attach that
+copy, and the email only says "I've attached my resume" when the copy is
+actually there to attach.
 
 ---
 
@@ -153,8 +168,11 @@ prints the actual error instead of failing silently. The app also writes to
 
 Common ones:
 
-- **Nothing happens when I open the app.** Python is probably missing or too
-  old. Run `Run in Terminal.command` to see.
+- **Nothing happens when I open the app.** Most often the folder has ended up
+  inside Desktop, Documents, Downloads or iCloud Drive, where macOS silently
+  blocks it — move it to your home folder. Otherwise the app's Python may be
+  missing: double-click `install.command` again. `Run in Terminal.command`
+  shows the exact reason.
 - **"Calendar access denied".** System Settings → Privacy & Security →
   Calendars → enable Coffee Chat Tracker.
 - **Slots tab finds nothing.** Your rules are too tight. Widen working hours,
@@ -163,8 +181,9 @@ Common ones:
   stopped. Nothing you type is being saved while that bar is up. Click Reload;
   if that fails, quit and reopen the app. Anything saved before the bar appeared
   is safe on disk.
-- **I moved this folder.** Run `install.command` again; the app bundle points at
-  a fixed path.
+- **I moved this folder.** That's fine as long as the app stays inside it and
+  the folder isn't in one of the blocked places above. macOS may ask for
+  Calendar access once more.
 
 Edits in the person panel save themselves as you leave each field — there is no
 Save button to forget. The line at the bottom of the panel confirms each save,
