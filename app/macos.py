@@ -209,6 +209,17 @@ def scan_outlook(days_back=30, max_messages=400):
     return messages, diagnostics
 
 
+def _html_body(text):
+    """The blank lines between paragraphs, and the single line breaks inside
+    the slot list, only survive in Outlook's `content` property (HTML) if
+    they are spelled out as markup — a raw "\\n\\n" is just whitespace to an
+    HTML renderer and collapses to one run-on paragraph, which is why the
+    rich fallback script used to come out unformatted."""
+    escaped = (text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+    paragraphs = [p for p in escaped.split("\n\n") if p.strip("\n")]
+    return "".join("<p>%s</p>" % p.replace("\n", "<br>") for p in paragraphs)
+
+
 def draft_email(to_address, to_name, subject, body, attachment=""):
     """Open a pre-filled draft in Outlook. Never sends."""
     if DEMO:
@@ -218,10 +229,17 @@ def draft_email(to_address, to_name, subject, body, attachment=""):
     attachment = attachment or ""
     if attachment and not os.path.isfile(os.path.expanduser(attachment)):
         attachment = ""
-    args = [to_address, to_name, subject, body, os.path.expanduser(attachment) if attachment else ""]
+    attach_arg = os.path.expanduser(attachment) if attachment else ""
+
+    # The plain script keeps the line breaks verbatim via `plain text
+    # content`; the rich fallback only has the HTML `content` property, so it
+    # needs the paragraph breaks marked up or they disappear on open.
+    bodies = {"outlook_draft_plain.applescript": body,
+              "outlook_draft.applescript": _html_body(body)}
 
     errors = []
     for script in ("outlook_draft_plain.applescript", "outlook_draft.applescript"):
+        args = [to_address, to_name, subject, bodies[script], attach_arg]
         try:
             _run(["osascript", _script(script)] + args, DETECT_TIMEOUT)
             return {"ok": True, "script": script}
