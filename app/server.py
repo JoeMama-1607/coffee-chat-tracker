@@ -38,6 +38,74 @@ TOKEN = secrets.token_urlsafe(24)
 SESSION = secrets.token_urlsafe(12)
 
 _outlook_status = {"checked": False}
+
+
+def _hold_title(person, settings):
+    name = person.get("name") or ""
+    prefix = settings.get("hold_prefix") or "Coffee chat hold"
+    return "%s — %s" % (prefix, name) if name else prefix
+
+
+def _offered_windows(person):
+    try:
+        saved = json.loads(person.get("offered_slots") or "null") or {}
+    except ValueError:
+        saved = {}
+    return ics.windows_from_days(saved.get("days", []), availability.parse_iso)
+
+
+def _same(a, b):
+    return (abs((a[0] - b[0]).total_seconds()) < 60
+            and abs((a[1] - b[1]).total_seconds()) < 60)
+
+
+def _sync_holds(person, settings, old_windows, new_windows):
+    """Busy holds on Apple Calendar for exactly `new_windows`."""
+    title = _hold_title(person, settings)
+    gone = [w for w in old_windows if not any(_same(w, n) for n in new_windows)]
+    notes = ("Time offered to %s for a coffee chat. Held so nothing else takes "
+             "it; Coffee Chat Tracker removes it when the chat is confirmed or "
+             "the slot is dropped." % (person.get("name") or "someone"))
+    if not gone and not new_windows:
+        return {"ok": True, "deleted": 0, "created": 0, "errors": []}
+    try:
+        return macos.calendar_sync(
+            delete=[(title, s, e) for s, e in gone],
+            ensure=[{"prefix": title, "title": title, "start": s, "end": e,
+                     "notes": notes} for s, e in new_windows])
+    except macos.BridgeError as exc:
+        return {"ok": False, "deleted": 0, "created": 0, "error": str(exc)}
+
+
+def _chat_title(person):
+    name = person.get("name") or ""
+    return "Coffee chat — %s" % name if name else "Coffee chat"
+
+
+def _chat_start(person, tz):
+    """The chat's current start as an aware datetime, or None."""
+    raw = person.get("chat_at")
+    if not raw:
+        return None
+    moment = availability.parse_iso(raw)
+    if moment and moment.tzinfo is None:
+        moment = moment.replace(tzinfo=tz)
+    return moment
+
+
+def _sync_chat(person, settings, deletes, new_window, old_start):
+    """Delete `deletes`, then move the chat event from old_start (or create it)."""
+    title = _chat_title(person)
+    notes = "Role: %s\nEmail: %s\n\nConfirmed by Coffee Chat Tracker." % (
+        person.get("role") or "", person.get("email") or "")
+    try:
+        return macos.calendar_sync(delete=deletes, upsert={
+            "prefix": title, "title": title + (" (%s)" % person["firm"] if person.get("firm") else ""),
+            "start": new_window[0], "end": new_window[1], "notes": notes,
+            "match": (old_start, None) if old_start else None,
+        })
+    except macos.BridgeError as exc:
+        return {"ok": False, "deleted": 0, "updated": 0, "created": 0, "error": str(exc)}
 _calendar_status = {"checked": False}
 _lock = threading.Lock()
 
@@ -668,9 +736,19 @@ class Handler(BaseHTTPRequestHandler):
             text, count = ics.build_slots_ics(windows, body.get("label", ""), settings)
             if not count:
                 return self._error("There are no slots to export yet.", 400)
-            return self._file(text.encode("utf-8"),
-                              "text/calendar; charset=utf-8",
-                              "Coffee chat holds.ics")
+            # Saved into the app's own holds/ folder (not Downloads) and opened,
+            # which hands it straight to Calendar to import.
+            label = (body.get("label") or "").strip()
+            safe = "".join(c for c in label if c.isalnum() or c in " -_").strip() or "holds"
+            folder = os.path.join(os.path.dirname(HERE), "holds")
+            os.makedirs(folder, exist_ok=True)
+            stamp = dt.datetime.now().strftime("%Y-%m-%d %H%M%S")
+            file_path = os.path.join(folder, "Coffee chat holds - %s - %s.ics" % (safe, stamp))
+            with open(file_path, "w", encoding="utf-8", newline="") as fh:
+                fh.write(text)
+            opened = macos.open_path(file_path)
+            return self._json({"ok": True, "count": count, "file": os.path.basename(file_path),
+                               "folder": "holds", "opened": opened})
 
         if path == "/api/confirm-slot":
             person = db.get_person(int(body.get("person_id") or 0))
@@ -699,14 +777,35 @@ class Handler(BaseHTTPRequestHandler):
                 return (abs((a[0] - b[0]).total_seconds()) < 60
                         and abs((a[1] - b[1]).total_seconds()) < 60)
 
-            cancelled = [w for w in offered if not same_window(w, (start, end))]
-            text = ics.build_confirm_ics((start, end), cancelled, person.get("name"), settings)
+            name = person.get("name") or ""
+            prefix = settings.get("hold_prefix") or "Coffee chat hold"
+            hold_title = "%s — %s" % (prefix, name) if name else prefix
+            tz = availability.get_tz(settings.get("timezone", "America/New_York"))
+
+            # Edit the calendar in place: every hold offered to them goes, and
+            # the chat itself is added (or moved, if one was already there).
+            deletes = [(hold_title, w[0], w[1]) for w in offered]
+            old = _chat_start(person, tz)
+            calendar = _sync_chat(person, settings, deletes, (start, end), old)
+
+            # Keep a record in "confirmed slots", next to the app. Imported
+            # from the file only if the calendar couldn't be edited directly.
+            text = ics.build_confirm_ics((start, end), name, settings)
+            safe = "".join(c for c in name if c.isalnum() or c in " -_").strip() or "chat"
+            folder = os.path.join(os.path.dirname(HERE), "confirmed slots")
+            os.makedirs(folder, exist_ok=True)
+            file_path = os.path.join(folder, "Coffee chat confirmed - %s - %s.ics"
+                                     % (safe, start.astimezone(tz).strftime("%Y-%m-%d %H%M")))
+            with open(file_path, "w", encoding="utf-8", newline="") as fh:
+                fh.write(text)
+            placed = calendar.get("created") or calendar.get("updated")
+            imported = macos.open_path(file_path) if not placed else False
+            if placed:
+                macos.open_path(app="Calendar")
 
             # Every other place chat_at is read (compute_actions, chat_buckets,
-            # the datetime-local field in the drawer) treats it as naive local
-            # time, not UTC — store it the same way, or it displays and sorts
-            # hours off from what was actually picked.
-            tz = availability.get_tz(settings.get("timezone", "America/New_York"))
+            # the drawer) treats it as naive local time, not UTC — store it the
+            # same way, or it displays and sorts hours off.
             local_start = start.astimezone(tz).replace(tzinfo=None)
             patch = {"chat_at": local_start.isoformat(), "offered_slots": "",
                      "offered_slots_at": None}
@@ -714,9 +813,50 @@ class Handler(BaseHTTPRequestHandler):
                 patch["status"] = "scheduled"
             db.update_person(person["id"], patch)
 
-            safe = "".join(c for c in person["name"] if c.isalnum() or c in " -_").strip() or "chat"
-            return self._file(text.encode("utf-8"), "text/calendar; charset=utf-8",
-                              "Coffee chat confirmed - %s.ics" % safe)
+            return self._json({
+                "ok": True,
+                "file": os.path.basename(file_path),
+                "folder": "confirmed slots",
+                "imported": imported,
+                "calendar": calendar,
+                "holds": len(offered),
+            })
+
+        if path == "/api/chat/reschedule":
+            person = db.get_person(int(body.get("person_id") or 0))
+            if not person:
+                return self._error("person not found", 404)
+            start = availability.parse_iso(body.get("start"))
+            end = availability.parse_iso(body.get("end"))
+            if not start or not end or end <= start:
+                return self._error("A start and a later end time are required.", 400)
+            tz = availability.get_tz(settings.get("timezone", "America/New_York"))
+            calendar = _sync_chat(person, settings, [], (start, end), _chat_start(person, tz))
+            if calendar.get("created") or calendar.get("updated"):
+                macos.open_path(app="Calendar")
+            patch = {"chat_at": start.astimezone(tz).replace(tzinfo=None).isoformat()}
+            if person.get("status") not in ("chat_done", "thankyou_sent"):
+                patch["status"] = "scheduled"
+            return self._json({"ok": True, "calendar": calendar,
+                               "person": db.update_person(person["id"], patch)})
+
+        if path == "/api/chat/cancel":
+            person = db.get_person(int(body.get("person_id") or 0))
+            if not person:
+                return self._error("person not found", 404)
+            tz = availability.get_tz(settings.get("timezone", "America/New_York"))
+            old = _chat_start(person, tz)
+            calendar = {"ok": True, "deleted": 0, "errors": []}
+            if old:
+                try:
+                    calendar = macos.calendar_sync(delete=[(_chat_title(person), old, None)])
+                except macos.BridgeError as exc:
+                    calendar = {"ok": False, "deleted": 0, "error": str(exc)}
+            patch = {"chat_at": None}
+            if person.get("status") == "scheduled":
+                patch["status"] = "awaiting_reply"
+            return self._json({"ok": True, "calendar": calendar,
+                               "person": db.update_person(person["id"], patch)})
 
         if path == "/api/action/resolve":
             key = (body.get("key") or "").strip()
@@ -727,12 +867,32 @@ class Handler(BaseHTTPRequestHandler):
                 body.get("label", ""), body.get("detail", ""),
                 body.get("name", ""), SESSION,
             )
+            # Ticking off "Send thank-you note" means it went out.
+            if body.get("kind") == "thankyou" and body.get("person_id"):
+                person = db.get_person(int(body["person_id"]))
+                if person and person.get("status") != "thankyou_sent":
+                    stamp = dt.datetime.now(availability.get_tz(
+                        settings.get("timezone", "America/New_York"))).isoformat()
+                    db.update_person(person["id"], {
+                        "status": "thankyou_sent", "thankyou_sent_at": stamp})
             return self._json({"ok": True})
 
         if path == "/api/action/restore":
             key = (body.get("key") or "").strip()
             if not key:
                 return self._error("missing action key", 400)
+            # Undoing a ticked-off thank-you also undoes the status it set.
+            conn = db.connect()
+            try:
+                row = conn.execute("SELECT kind, person_id FROM resolved_action "
+                                   "WHERE key=?", (key,)).fetchone()
+            finally:
+                conn.close()
+            if row and row["kind"] == "thankyou" and row["person_id"]:
+                person = db.get_person(int(row["person_id"]))
+                if person and person.get("status") == "thankyou_sent":
+                    db.update_person(person["id"], {"status": "chat_done",
+                                                    "thankyou_sent_at": None})
             db.restore_action(key)
             return self._json({"ok": True})
 
@@ -842,19 +1002,26 @@ class Handler(BaseHTTPRequestHandler):
             person = db.get_person(int(body["person_id"]))
             if not person:
                 return self._error("person not found", 404)
+            # Saved slots and the busy holds on Apple Calendar move together:
+            # windows dropped since the last save lose their hold, new ones
+            # gain one, and clearing removes them all.
+            old_windows = _offered_windows(person)
+            new_days = [] if body.get("clear") else (body.get("days") or [])
+            new_windows = ics.windows_from_days(new_days, availability.parse_iso)
+            calendar = _sync_holds(person, settings, old_windows, new_windows)
             if body.get("clear"):
                 person = db.update_person(person["id"],
                                           {"offered_slots": "", "offered_slots_at": None})
-                return self._json({"ok": True, "person": person})
+                return self._json({"ok": True, "person": person, "calendar": calendar})
             payload = json.dumps({
                 "lines": body.get("lines") or [],
-                "days": body.get("days") or [],
+                "days": new_days,
             })
             stamp = dt.datetime.now(
                 availability.get_tz(settings.get("timezone"))).isoformat()
             person = db.update_person(person["id"], {
                 "offered_slots": payload, "offered_slots_at": stamp})
-            return self._json({"ok": True, "person": person})
+            return self._json({"ok": True, "person": person, "calendar": calendar})
 
         if path == "/api/prep":
             sheet = self._prep(body, settings)

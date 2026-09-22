@@ -219,7 +219,7 @@ function renderToday() {
   $('#today-banners').innerHTML = banners.join('');
 
   $('#actions').innerHTML = STATE.actions.length ? STATE.actions.map(a => `
-    <div class="action ${a.urgency}">
+    <div class="action ${a.urgency} clickable" data-open="${a.person_id}">
       <div class="grow">
         <span class="who">${esc(a.name)}</span>
         <span class="muted small">${a.firm ? ' · ' + esc(a.firm) : ''}</span>
@@ -274,7 +274,7 @@ function renderToday() {
   }).join('') : '';
 
   $('#upcoming').innerHTML = chats.upcoming.length ? chats.upcoming.map(u => `
-    <div class="action">
+    <div class="action clickable" data-open="${u.person_id}">
       <div class="grow">
         <span class="who">${esc(u.name)}</span>
         <span class="muted small">${u.firm ? ' · ' + esc(u.firm) : ''}${u.role ? ' · ' + esc(u.role) : ''}</span>
@@ -469,7 +469,10 @@ async function openPerson(id, quiet = false) {
     <div class="card" style="margin-bottom:16px;padding:12px 14px">
       <div class="row between" style="margin-bottom:6px">
         <strong style="font-size:13px">Slots offered to ${esc(person.name.split(' ')[0])}</strong>
-        <button class="btn ghost sm" id="d-clear-slots">Clear</button>
+        <span class="row" style="gap:6px">
+          <button class="btn ghost sm" id="d-clear-slots">Clear</button>
+          <button class="btn sm" id="d-edit-slots">Edit</button>
+        </span>
       </div>
       ${savedWindows.map(({ day, w }) => {
         const passed = day.date && day.date < today;
@@ -493,16 +496,35 @@ async function openPerson(id, quiet = false) {
       <div style="font-size:13px;font-weight:650;margin-bottom:8px">
         What time did you land on?</div>
       <div class="row" style="gap:8px">
-        <input type="date" id="d-confirm-date" style="max-width:150px">
-        <input type="time" id="d-confirm-start" style="max-width:110px">
-        <span class="small muted">to</span>
-        <input type="time" id="d-confirm-end" style="max-width:110px">
+        ${chatTimeFields('d-confirm', '', '12:00')}
         <button class="btn gold sm" id="d-confirm-btn">Confirm</button>
       </div>
-      <p class="small faint" style="margin:8px 0 0">Doesn't need to match anything
-        above — enter whatever you actually agreed on. This sets the chat date,
-        moves them to Chat scheduled, and downloads a calendar file that confirms
-        it and cancels the other holds.</p>
+      <p class="small faint" style="margin:8px 0 0">This sets the chat date,
+        moves them to Chat scheduled, turns that hold into the real meeting in
+        Apple Calendar and deletes the other holds.</p>
+    </div>` : '';
+
+  // Once a chat is on the calendar: see it, move it, or call it off. Both go
+  // through Apple Calendar directly, so the event moves or disappears too.
+  const chatDate = (person.chat_at || '').slice(0, 10);
+  const chatHHMM = (person.chat_at || '').slice(11, 16);
+  const chatBox = person.chat_at ? `
+    <div class="card" style="margin-bottom:16px;padding:12px 14px">
+      <div class="row between">
+        <strong style="font-size:13px">☕ ${esc(chatTimeLabel(person.chat_at))}</strong>
+        <span class="row" style="gap:6px">
+          <button class="btn sm" id="d-chat-edit">Reschedule</button>
+          <button class="btn ghost sm" id="d-chat-cancel">Cancel chat</button>
+        </span>
+      </div>
+      <div id="d-chat-editor" style="display:none;margin-top:10px">
+        <div class="row" style="gap:8px">
+          ${chatTimeFields('d-resched', chatDate, chatHHMM)}
+          <button class="btn gold sm" id="d-resched-save">Save</button>
+        </div>
+        <p class="small faint" style="margin:8px 0 0">Moves the event in Apple Calendar
+          (or adds it, if it isn't there).</p>
+      </div>
     </div>` : '';
 
   const hasProfile = !!(person.linkedin_raw || '').trim();
@@ -533,6 +555,7 @@ async function openPerson(id, quiet = false) {
       </div>
     </div>
 
+    ${chatBox}
     ${savedBlock}
     ${confirmBox}
 
@@ -558,7 +581,8 @@ async function openPerson(id, quiet = false) {
     </div>
     <div class="grid-2">
       <label class="field"><span>Chat date &amp; time</span>
-        <input type="datetime-local" data-f="chat_at" value="${(person.chat_at || '').slice(0, 16)}"></label>
+        <input type="text" readonly value="${person.chat_at ? esc(chatTimeLabel(person.chat_at)) : 'Not scheduled'}"
+               title="Use Reschedule / Cancel chat above, or the confirm box"></label>
       <label class="field"><span>Introduced by</span>
         <select data-f="referred_by"><option value="">—</option>${STATE.people.filter(p => p.id !== person.id).map(p =>
           `<option value="${p.id}"${p.id === person.referred_by ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>
@@ -576,7 +600,6 @@ async function openPerson(id, quiet = false) {
     <div class="row" style="margin:4px 0 20px">
       <span class="small muted" id="d-savestate">Every field saves as you leave it</span>
       <div class="spacer"></div>
-      <button class="btn sm" id="d-cal">Add to Apple Calendar</button>
       <button class="btn danger sm" id="d-delete">Delete</button>
     </div>
 
@@ -1064,7 +1087,126 @@ function pickedDays(days, picked) {
     .filter(day => day.windows.length);
 }
 
-async function openSuggestSlots(personId) {
+/* Hour + quarter-hour picker. Replaces <input type="time"> everywhere: the
+   hour list is the same width for every value, and minutes only come in
+   :00 / :15 / :30 / :45. `attrs` goes on the wrapper; read with readTime(). */
+function timePicker(attrs, hhmm) {
+  let [h, m] = (hhmm || '12:00').split(':').map(Number);
+  m = Math.round((m || 0) / 15) * 15;
+  if (m === 60) { m = 0; h = (h + 1) % 24; }
+  const h12 = h % 12 || 12, pm = h >= 12;
+  const hours = Array.from({ length: 12 }, (_, i) => i + 1).map(x =>
+    `<option value="${x}"${x === h12 ? ' selected' : ''}>${String(x).padStart(2, '0')}</option>`).join('');
+  const mins = [0, 15, 30, 45].map(x =>
+    `<option value="${x}"${x === m ? ' selected' : ''}>${String(x).padStart(2, '0')}</option>`).join('');
+  return `<span class="tpick" ${attrs}><select class="tp-h" aria-label="Hour">${hours}</select><span class="tp-colon">:</span><select class="tp-m" aria-label="Minutes">${mins}</select><button type="button" class="tp-ap" data-ap="${pm ? 'PM' : 'AM'}" aria-label="AM or PM">${pm ? 'PM' : 'AM'}</button></span>`;
+}
+function readTime(el) {
+  if (!el) return '';
+  const h12 = Number(el.querySelector('.tp-h').value) % 12;
+  const h = h12 + (el.querySelector('.tp-ap').dataset.ap === 'PM' ? 12 : 0);
+  const m = el.querySelector('.tp-m').value;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+function setTime(el, hhmm) {
+  const [h, m] = hhmm.split(':').map(Number);
+  el.querySelector('.tp-h').value = String(h % 12 || 12);
+  el.querySelector('.tp-m').value = String(m);
+  const ap = el.querySelector('.tp-ap');
+  ap.dataset.ap = ap.textContent = h >= 12 ? 'PM' : 'AM';
+}
+// The AM/PM toggle flips on click and reports it like any other change, so the
+// 30-minute end and the slot editor both pick it up.
+document.addEventListener('click', (ev) => {
+  const ap = ev.target.closest('.tp-ap');
+  if (!ap) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  ap.dataset.ap = ap.textContent = ap.dataset.ap === 'PM' ? 'AM' : 'PM';
+  ap.dispatchEvent(new Event('change', { bubbles: true }));
+}, true);
+/* HH:MM plus minutes, wrapping past midnight. */
+function addMinutes(hhmm, mins) {
+  const [h, m] = hhmm.split(':').map(Number);
+  const t = (h * 60 + m + mins + 1440) % 1440;
+  return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
+}
+const CHAT_MINUTES = 30;
+
+/* Date + start + end, 30 minutes by default; changing the start moves the end. */
+function chatTimeFields(prefix, dateStr, startHHMM) {
+  const start = startHHMM || '12:00';
+  return `<div class="chat-time">
+      <input type="date" id="${prefix}-date" value="${esc(dateStr || '')}" style="max-width:150px">
+      ${timePicker(`id="${prefix}-start"`, start)}
+      <span class="small muted">to</span>
+      ${timePicker(`id="${prefix}-end"`, addMinutes(start, CHAT_MINUTES))}
+    </div>`;
+}
+// Any "<x>-start" picker drags its "<x>-end" partner along, 30 minutes later.
+document.addEventListener('change', (ev) => {
+  const st = ev.target.closest('.tpick[id$="-start"]');
+  if (!st) return;
+  const en = document.getElementById(st.id.replace(/-start$/, '-end'));
+  if (en) setTime(en, addMinutes(readTime(st), CHAT_MINUTES));
+});
+function readChatTimeFields(prefix) {
+  const d = document.getElementById(prefix + '-date').value;
+  const a = readTime(document.getElementById(prefix + '-start'));
+  const b = readTime(document.getElementById(prefix + '-end'));
+  if (!d) return { error: 'Pick a date' };
+  const start = new Date(`${d}T${a}`), end = new Date(`${d}T${b}`);
+  if (!(end > start)) return { error: 'End time must be after the start time' };
+  return { start: start.toISOString(), end: end.toISOString() };
+}
+
+/* '2:30pm', matching the server's fmt_time. */
+function fmtSlotTime(h, m) {
+  return `${h % 12 || 12}:${String(m).padStart(2, '0')}${h < 12 ? 'am' : 'pm'}`;
+}
+
+/* Wall-clock HH:MM straight out of an ISO string like 2026-09-24T14:30:00-04:00,
+   so the time shown is the calendar's time zone, not the browser's. */
+function isoHHMM(iso) { return (iso || '').slice(11, 16); }
+
+/* Re-time one window in place, keeping its date and UTC offset. */
+function retimeWindow(w, startHHMM, endHHMM) {
+  const date = w.start.slice(0, 10);
+  const offset = (w.start.match(/([+-]\d\d:\d\d|Z)$/) || [''])[0];
+  const toMin = t => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
+  const a = toMin(startHHMM), b = toMin(endHHMM);
+  if (!(b > a)) return false;
+  w.start = `${date}T${startHHMM}:00${offset}`;
+  w.end = `${date}T${endHHMM}:00${offset}`;
+  w.minutes = b - a;
+  w.text = `${fmtSlotTime(Math.floor(a / 60), a % 60)} – ${fmtSlotTime(Math.floor(b / 60), b % 60)}`;
+  return true;
+}
+
+/* Put the person's saved windows into the finder's list, ticked. They are
+   usually missing from a fresh search — their own holds now block them. */
+function mergeSaved(data, savedDays, picked) {
+  savedDays.forEach(sd => {
+    let day = data.days.find(d => d.date === sd.date);
+    if (!day) {
+      day = { date: sd.date, label: sd.label, windows: [] };
+      data.days.push(day);
+    }
+    (sd.windows || []).forEach(w => {
+      if (!day.windows.some(x => x.start === w.start && x.end === w.end)) day.windows.push({ ...w });
+    });
+  });
+  data.days.sort((a, b) => a.date.localeCompare(b.date));
+  data.days.forEach(day => day.windows.sort((a, b) => a.start.localeCompare(b.start)));
+  data.days.forEach((day, di) => day.windows.forEach((w, wi) => {
+    if (savedDays.some(sd => sd.date === day.date
+        && (sd.windows || []).some(x => x.start === w.start && x.end === w.end))) {
+      picked.add(`${di}:${wi}`);
+    }
+  }));
+}
+
+async function openSuggestSlots(personId, opts = {}) {
   const person = (CURRENT && CURRENT.id === personId)
     ? CURRENT : await api('/api/person/' + personId);
 
@@ -1079,6 +1221,13 @@ async function openSuggestSlots(personId) {
     return toast(e.message, true);
   }
 
+  const picked = new Set();
+  if (opts.editSaved) {
+    let saved = null;
+    try { saved = JSON.parse(person.offered_slots || 'null'); } catch (e) { saved = null; }
+    mergeSaved(data, (saved && saved.days) || [], picked);
+  }
+
   if (!data.days.length) {
     $('#m-body').innerHTML = `<div class="card empty">No conflict-free windows in the
       next two weeks — the calendar looks fully booked between 9am and 6pm on
@@ -1086,8 +1235,7 @@ async function openSuggestSlots(personId) {
     return;
   }
 
-  // Nothing starts ticked — pick whichever windows actually work.
-  const picked = new Set();
+  // Nothing starts ticked (unless editing saved slots) — pick whichever work.
   paintSuggestSlots(person, data, picked);
 }
 
@@ -1113,15 +1261,11 @@ function paintSuggestSlots(person, data, picked) {
       <button class="btn" id="slot-copy">Copy for email</button>
       <button class="btn" id="slot-draft">Use in outreach draft</button>
     </div>
-    <p class="small faint" style="margin:6px 0 0">Saved slots are what every outreach
-      and nudge draft for them will offer from now on, until you pick again.</p>
-    <div class="row" style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
-      <button class="btn gold" id="slot-ics">Download .ics holds</button>
-      <span class="small faint" style="flex:1;min-width:220px">Blocks these windows in
-        Apple Calendar as <strong>busy</strong> holds under
-        ${esc(person.name)}'s name, so nothing else takes the time and the finder
-        won't offer it to anyone else. Delete them if the chat falls through.</span>
-    </div>`;
+    <p class="small faint" style="margin:6px 0 0">Saving blocks these windows in Apple
+      Calendar as <strong>busy</strong> holds under ${esc(person.name)}'s name, and they're
+      what every outreach and nudge draft offers until you pick again. Re-saving
+      moves the holds; confirming or clearing removes them.</p>
+`;
 
   /* The list is redrawn whenever more days arrive, so it lives in its own
      container — the change listener below is bound once, to the panel. */
@@ -1138,7 +1282,14 @@ function paintSuggestSlots(person, data, picked) {
                    ${picked.has(`${di}:${wi}`) ? 'checked' : ''}>
             <span>${esc(w.text)} ${esc(tzLabel)}</span>
             <span class="small faint">${w.minutes} min</span>
-          </label>`).join('')}
+          </label>
+          ${picked.has(`${di}:${wi}`) ? `
+          <div class="row slot-edit" style="gap:6px;margin:-2px 0 8px 36px">
+            <span class="small muted">Adjust:</span>
+            ${timePicker(`data-edit="${di}:${wi}" data-edge="start"`, isoHHMM(w.start))}
+            <span class="small muted">to</span>
+            ${timePicker(`data-edit="${di}:${wi}" data-edge="end"`, isoHHMM(w.end))}
+          </div>` : ''}`).join('')}
       </div>`).join('');
   };
 
@@ -1186,10 +1337,25 @@ function paintSuggestSlots(person, data, picked) {
   };
 
   $('#m-body').addEventListener('change', (ev) => {
+    const edit = ev.target.closest('[data-edit]');
+    if (edit) {
+      const [di, wi] = edit.dataset.edit.split(':').map(Number);
+      const w = data.days[di].windows[wi];
+      const row = edit.closest('.slot-edit');
+      const start = readTime(row.querySelector('[data-edge="start"]'));
+      const end = readTime(row.querySelector('[data-edge="end"]'));
+      if (!start || !end || !retimeWindow(w, start, end)) {
+        toast('End time must be after the start time', true);
+      }
+      renderList();
+      lines = preview();
+      return;
+    }
     const box = ev.target.closest('[data-pick]');
     if (!box) return;
     if (box.checked) picked.add(box.dataset.pick);
     else picked.delete(box.dataset.pick);
+    renderList();
     lines = preview();
   });
 
@@ -1203,7 +1369,7 @@ function paintSuggestSlots(person, data, picked) {
         person_id: person.id, lines, days: pickedDays(data.days, picked),
       });
       if (CURRENT && CURRENT.id === person.id) CURRENT = res.person;
-      return true;
+      return res;
     } catch (e) {
       toast(e.message, true);
       return false;
@@ -1214,8 +1380,12 @@ function paintSuggestSlots(person, data, picked) {
     if (!lines.length) return toast('Tick at least one window first', true);
     const btn = ev.currentTarget;
     btn.disabled = true;
-    if (await persist()) {
-      toast(`${lines.length} day${lines.length === 1 ? '' : 's'} saved for ${person.name}`);
+    const res = await persist();
+    if (res) {
+      const cal = res.calendar || {};
+      const holds = cal.error ? ` — Calendar not updated (${cal.error})`
+        : ` — holds updated in Calendar`;
+      toast(`${lines.length} day${lines.length === 1 ? '' : 's'} saved for ${person.name}${holds}`, !!cal.error);
       closeModal();
       await refresh();
     }
@@ -1235,10 +1405,6 @@ function paintSuggestSlots(person, data, picked) {
     openDraft(person.id, 'outreach', lines);
   };
 
-  $('#slot-ics').onclick = async (ev) => {
-    await persist();
-    downloadIcs(pickedDays(data.days, picked), person.name, ev.currentTarget);
-  };
 }
 
 function defaultChatTime() {
@@ -1258,8 +1424,9 @@ function askChatDate(personId, name, existing) {
     <p class="small muted" style="margin-top:0">${esc(name)} just moved to
       <strong>Chat scheduled</strong>. The thank-you clock, the Today page and firm
       coverage all run off this date.</p>
-    <label class="field"><span>Chat date &amp; time</span>
-      <input type="datetime-local" id="sched-when" value="${esc(existing || defaultChatTime())}"></label>
+    <div class="field"><span>Chat date &amp; time</span>
+      ${chatTimeFields('sched', (existing || defaultChatTime()).slice(0, 10),
+                       (existing || defaultChatTime()).slice(11, 16))}</div>
     <div class="row">
       <button class="btn primary" id="sched-save">Save date</button>
       <button class="btn ghost" id="sched-skip">Skip for now</button>
@@ -1267,12 +1434,12 @@ function askChatDate(personId, name, existing) {
     </div>`);
 
   $('#sched-save').onclick = async () => {
-    const when = $('#sched-when').value;
-    if (!when) return toast('Pick a date and time', true);
+    const when = readChatTimeFields('sched');
+    if (when.error) return toast(when.error, true);
     try {
-      await api('/api/person/' + personId, 'POST', { chat_at: when });
+      const res = await api('/api/chat/reschedule', 'POST', { person_id: personId, ...when });
       closeModal();
-      toast('Chat date saved');
+      toast(calendarNote(res.calendar, 'Chat date saved'));
       await refresh();
       if (CURRENT && CURRENT.id === personId) openPerson(personId, true);
     } catch (e) { toast(e.message, true); }
@@ -1480,28 +1647,10 @@ async function downloadIcs(days, holdLabel, button) {
   button.disabled = true;
   button.textContent = 'Building…';
   try {
-    const res = await fetch('/api/slots.ics', {
-      method: 'POST',
-      headers: { 'X-CCT-Token': window.CCT_TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ days, label: holdLabel }),
-    });
-    if (!res.ok) {
-      let message = 'Could not build the calendar file.';
-      try { message = (await res.json()).error || message; } catch (e) { /* keep default */ }
-      throw new Error(message);
-    }
-    const disposition = res.headers.get('Content-Disposition') || '';
-    const match = disposition.match(/filename="([^"]+)"/);
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = match ? match[1] : 'Coffee chat holds.ics';
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
-    toast(`${events} hold${events === 1 ? '' : 's'} saved — open the file to add them`);
+    const res = await api('/api/slots.ics', 'POST', { days, label: holdLabel });
+    toast(res.opened
+      ? `${res.count} hold${res.count === 1 ? '' : 's'} saved to the holds folder — Calendar is opening it`
+      : `${res.count} hold${res.count === 1 ? '' : 's'} saved to the holds folder as "${res.file}"`);
   } catch (e) {
     toast(e.message, true);
   } finally {
@@ -1510,40 +1659,44 @@ async function downloadIcs(days, holdLabel, button) {
   }
 }
 
+function calendarNote(cal, lead) {
+  cal = cal || {};
+  if (cal.error) return `${lead} — Calendar not updated (${cal.error})`;
+  if (cal.updated) return `${lead} — moved in Calendar`;
+  if (cal.created) return `${lead} — added to Calendar`;
+  return lead;
+}
+
+/* Two-click confirm on the button itself, instead of a blocking dialog. */
+function confirmInline(button, prompt) {
+  if (button.dataset.armed) return true;
+  const label = button.textContent;
+  button.dataset.armed = '1';
+  button.textContent = prompt;
+  setTimeout(() => { delete button.dataset.armed; button.textContent = label; }, 4000);
+  return false;
+}
+
 /* Marks one of the offered windows as the one that was actually accepted:
-   sets the chat date, moves the person to Chat scheduled, and hands back a
-   calendar file that confirms that slot and marks every other offered window
-   as cancelled — reusing the same UID each hold was given, so a calendar
-   that still has them can update them in place instead of gaining a
-   duplicate. If yours doesn't, the stale holds are still easy to find and
-   remove by hand (search the hold title, as always). */
+   sets the chat date and moves the person to Chat scheduled. The server edits
+   Apple Calendar directly (the picked hold becomes the real meeting, the other
+   holds are deleted) and keeps an .ics record in "confirmed slots". */
 async function confirmSlot(personId, start, end, button) {
   const label = button.textContent;
   button.disabled = true;
   button.textContent = 'Confirming…';
   try {
-    const res = await fetch('/api/confirm-slot', {
-      method: 'POST',
-      headers: { 'X-CCT-Token': window.CCT_TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ person_id: personId, start, end }),
-    });
-    if (!res.ok) {
-      let message = 'Could not confirm that slot.';
-      try { message = (await res.json()).error || message; } catch (e) { /* keep default */ }
-      throw new Error(message);
-    }
-    const disposition = res.headers.get('Content-Disposition') || '';
-    const match = disposition.match(/filename="([^"]+)"/);
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = match ? match[1] : 'Coffee chat confirmed.ics';
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
-    toast('Chat confirmed — calendar file downloaded');
+    const res = await api('/api/confirm-slot', 'POST', { person_id: personId, start, end });
+    const cal = res.calendar || {};
+    const placed = cal.created || cal.updated;
+    let msg = placed ? 'Chat confirmed and added to Calendar'
+      : res.imported ? 'Chat confirmed — added from the confirmed slots folder'
+      : `Chat confirmed — saved "${res.file}" in the confirmed slots folder`;
+    if (res.holds) msg += cal.deleted >= res.holds
+      ? `; ${cal.deleted} hold${cal.deleted === 1 ? '' : 's'} removed`
+      : `; ${cal.deleted || 0} of ${res.holds} holds removed (delete the rest by hand)`;
+    if (cal.error) msg += ` (Calendar: ${cal.error})`;
+    toast(msg, !!cal.error);
     await refresh();
     if (CURRENT && CURRENT.id === personId) await openPerson(personId, true);
   } catch (e) {
@@ -1626,7 +1779,9 @@ document.addEventListener('click', async (ev) => {
         key: action.key, person_id: action.person_id, kind: action.kind,
         label: action.label, detail: action.detail, name: action.name,
       });
-      toast('Ticked off for today — in the bin below');
+      toast(action.kind === 'thankyou'
+        ? `${action.name} moved to Thank-you sent`
+        : 'Ticked off for today — in the bin below');
       return refresh();
     } catch (e) { return toast(e.message, true); }
   }
@@ -1795,6 +1950,38 @@ document.addEventListener('click', async (ev) => {
     return refresh();
   }
 
+  if (id === 'd-chat-edit') {
+    const box = $('#d-chat-editor');
+    box.style.display = box.style.display === 'none' ? '' : 'none';
+    return;
+  }
+
+  if (id === 'd-resched-save') {
+    if (!CURRENT) return;
+    const when = readChatTimeFields('d-resched');
+    if (when.error) return toast(when.error, true);
+    try {
+      const res = await api('/api/chat/reschedule', 'POST', { person_id: CURRENT.id, ...when });
+      toast(calendarNote(res.calendar, 'Chat rescheduled'), !!res.calendar.error);
+      await refresh();
+      return openPerson(CURRENT.id, true);
+    } catch (e) { return toast(e.message, true); }
+  }
+
+  if (id === 'd-chat-cancel') {
+    if (!CURRENT) return;
+    if (!confirmInline(ev.target, 'Sure? Cancel chat')) return;
+    try {
+      const res = await api('/api/chat/cancel', 'POST', { person_id: CURRENT.id });
+      const cal = res.calendar || {};
+      toast(cal.error ? `Chat cleared — remove it from Calendar by hand (${cal.error})`
+        : cal.deleted ? 'Chat cancelled and removed from Calendar'
+        : 'Chat cleared — no matching event was on the calendar', !!cal.error);
+      await refresh();
+      return openPerson(CURRENT.id, true);
+    } catch (e) { return toast(e.message, true); }
+  }
+
   if (id === 'd-cal') {
     const when = $('[data-f="chat_at"]').value;
     if (!when) return toast('Set a chat date first', true);
@@ -1808,25 +1995,28 @@ document.addEventListener('click', async (ev) => {
     return toast(res.ok ? 'Added to Apple Calendar' : (res.error || 'Failed'), !res.ok);
   }
 
+  if (id === 'd-edit-slots') {
+    if (!CURRENT) return;
+    return openSuggestSlots(CURRENT.id, { editSaved: true });
+  }
+
+
   if (id === 'd-clear-slots') {
     if (!CURRENT) return;
     try {
-      await api('/api/offered-slots', 'POST', { person_id: CURRENT.id, clear: true });
-      toast('Cleared — drafts will work out fresh availability again');
+      const res = await api('/api/offered-slots', 'POST', { person_id: CURRENT.id, clear: true });
+      const cal = res.calendar || {};
+      toast(cal.error ? `Cleared — remove the holds from Calendar by hand (${cal.error})`
+        : 'Cleared — holds removed from Calendar', !!cal.error);
       return refresh();
     } catch (e) { return toast(e.message, true); }
   }
 
   if (id === 'd-confirm-btn') {
     if (!CURRENT) return;
-    const dateStr = $('#d-confirm-date').value;
-    const startStr = $('#d-confirm-start').value;
-    const endStr = $('#d-confirm-end').value;
-    if (!dateStr || !startStr || !endStr) return toast('Pick a date, start and end time', true);
-    const start = new Date(`${dateStr}T${startStr}`);
-    const end = new Date(`${dateStr}T${endStr}`);
-    if (!(end > start)) return toast('End time must be after the start time', true);
-    return confirmSlot(CURRENT.id, start.toISOString(), end.toISOString(), ev.target);
+    const when = readChatTimeFields('d-confirm');
+    if (when.error) return toast(when.error, true);
+    return confirmSlot(CURRENT.id, when.start, when.end, ev.target);
   }
 
   if (id === 'note-add') {

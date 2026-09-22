@@ -403,3 +403,24 @@ mark.gap { background: rgba(242, 169, 0, .35); color: inherit; border-radius: 3p
   .cov .bar { display: none; }
   .drawer { width: 94vw; height: 90vh; }
 }
+
+/* Whole row opens the person; buttons inside keep their own action. */
+.action.clickable { cursor: pointer; }
+.action.clickable:hover { border-color: var(--border-strong); }
+
+/* Hour + quarter-hour picker: fixed widths so every value lines up. */
+.tpick { display: inline-flex; gap: 4px; align-items: center; }
+.tpick select { width: 62px; padding-right: 4px; font-variant-numeric: tabular-nums; }
+.tpick .tp-colon { font-weight: 600; margin: 0 -1px; }
+.tpick .tp-ap {
+  margin-left: 4px; min-width: 44px; padding: 5px 8px; font-size: 12.5px; font-weight: 650;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface-2); cursor: pointer;
+}
+.tpick .tp-ap:hover { border-color: var(--border-strong); }
+
+/* Date + start + "to" + end on one line, never wrapping mid-range. */
+.chat-time { display: inline-flex; flex-wrap: nowrap; align-items: center; gap: 8px; }
+.chat-time input[type="date"] { width: 150px; flex: none; }
+.chat-time .tpick { flex: none; }
+.chat-time .tpick select { padding-top: 5px; padding-bottom: 5px; }

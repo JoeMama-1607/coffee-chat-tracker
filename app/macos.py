@@ -145,6 +145,57 @@ def create_calendar_event(title, start_iso, end_iso, notes="", calendar_name="")
         raise BridgeError("Unexpected reply while creating the event: %s" % raw[:400])
 
 
+def _iso(moment):
+    return moment.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def calendar_sync(delete=None, upsert=None, ensure=None):
+    """Edit Apple Calendar in place (see scripts/calendar_sync.js).
+
+    delete: list of (title_prefix, start, end_or_None)
+    upsert: dict(prefix, match=(start, end_or_None)|None, title, start, end, notes)
+    Datetimes must be aware. Returns {"ok", "deleted", "updated", "created", "errors"}.
+    """
+    delete = delete or []
+    ensure = ensure or []
+    if DEMO:
+        return {"ok": True, "deleted": len(delete), "errors": [], "demo": True,
+                "ensured": len(ensure),
+                "updated": 1 if upsert and upsert.get("match") else 0,
+                "created": 1 if upsert and not upsert.get("match") else 0}
+    request = {"delete": [{"prefix": p, "start": _iso(s), "end": _iso(e) if e else None}
+                          for p, s, e in delete],
+               "ensure": [{"prefix": x["prefix"], "title": x["title"], "start": _iso(x["start"]),
+                           "end": _iso(x["end"]), "notes": x.get("notes", "")} for x in ensure]}
+    if upsert:
+        match = upsert.get("match")
+        request["upsert"] = {
+            "prefix": upsert["prefix"], "title": upsert["title"],
+            "start": _iso(upsert["start"]), "end": _iso(upsert["end"]),
+            "notes": upsert.get("notes", ""),
+            "match": ({"start": _iso(match[0]), "end": _iso(match[1]) if match[1] else None}
+                      if match else None),
+        }
+    raw = _run(["osascript", "-l", "JavaScript", _script("calendar_sync.js"),
+                json.dumps(request)], CALENDAR_TIMEOUT)
+    try:
+        return json.loads(raw)
+    except ValueError:
+        raise BridgeError("Unexpected reply while updating the calendar: %s" % raw[:400])
+
+
+def open_path(path=None, app=None):
+    """`open` a file (an .ics imports into Calendar) or bring an app forward."""
+    if DEMO:
+        return False
+    args = ["open"] + (["-a", app] if app else []) + ([path] if path else [])
+    try:
+        subprocess.run(args, timeout=15)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 # ------------------------------------------------------------------- Outlook
 
 def detect_outlook():

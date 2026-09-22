@@ -15,3 +15,11 @@ build/
 
 # The app's private Python, downloaded by install.command on each Mac.
 runtime/
+
+# Confirmed-chat calendar records (real names).
+confirmed slots/
+_to_delete/
+
+# Hold files carry real names; the packaged tgz is a build output.
+holds/
+/CoffeeChatTracker.tgz

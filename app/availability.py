@@ -187,7 +187,22 @@ def pick_spread(candidates, max_per_day, spread):
         return []
     for window in fallback:
         spread[_bucket(window[0])] += 1
-    return sorted((w[0], w[1]) for w in fallback)
+
+    # The spread rule chooses *which part* of a free stretch to lean on, but it
+    # must never hide the start of that stretch: free from 2:30 and offered
+    # "3:30–4:30" reads as busy until 3:30. Stretch each pick back to the
+    # earliest offer out of the same gap that still reaches the same end.
+    chosen = []
+    for w in fallback:
+        earlier = [c for c in candidates
+                   if c[2] == w[2] and c[0] < w[0] and c[1] >= w[1]]
+        alone = sum(1 for o in fallback if o[2] == w[2]) == 1
+        if earlier and alone:
+            best_c = min(earlier, key=lambda c: c[0])
+            chosen.append((best_c[0], best_c[1]))
+        else:
+            chosen.append((w[0], w[1]))
+    return sorted(chosen)
 
 
 def _merge(intervals):
