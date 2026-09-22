@@ -1098,11 +1098,8 @@ class Handler(BaseHTTPRequestHandler):
         person = db.get_person(int(body["person_id"]))
         if not person:
             return self._error("person not found", 404)
-        if not (person.get("linkedin_raw") or "").strip():
-            return self._json({
-                "ok": False, "needs_linkedin": True,
-                "error": "Upload their LinkedIn profile before drafting anything for them.",
-            })
+        # Drafting no longer needs their LinkedIn PDF — without it the hook
+        # paragraph is simply a placeholder. Only the prep sheet needs it.
 
         kind = body.get("kind", "outreach")
         lines = body.get("slot_lines")
@@ -1151,6 +1148,7 @@ class Handler(BaseHTTPRequestHandler):
         elif kind == "thankyou":
             patch.update({"status": "thankyou_sent", "thankyou_sent_at": stamp})
         db.update_person(person["id"], patch)
+        db.add_sent_mail(person["id"], kind, subject, text, stamp)
 
         return self._json({"ok": True, "drafted": True, "subject": subject,
                            "body": text, **({"demo": True} if result.get("demo") else {})})

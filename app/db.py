@@ -131,6 +131,19 @@ CREATE TABLE IF NOT EXISTS resolved_action (
 CREATE INDEX IF NOT EXISTS idx_person_status ON person(status);
 CREATE INDEX IF NOT EXISTS idx_note_person  ON note(person_id);
 CREATE INDEX IF NOT EXISTS idx_mail_person  ON mail_event(person_id);
+
+-- Exactly what went to Outlook when "Open in Outlook" was clicked, so the
+-- person panel can show the email that was sent. The app never sends: "sent"
+-- here means handed to Outlook as a draft.
+CREATE TABLE IF NOT EXISTS sent_mail (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    person_id  INTEGER NOT NULL REFERENCES person(id) ON DELETE CASCADE,
+    kind       TEXT NOT NULL,            -- outreach | followup | thankyou
+    subject    TEXT DEFAULT '',
+    body       TEXT DEFAULT '',
+    sent_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sent_person ON sent_mail(person_id);
 """
 
 # Pipeline stages, in the order the GCA deck describes the process.
@@ -336,6 +349,17 @@ def list_people(include_archived=False):
         conn.close()
 
 
+def add_sent_mail(pid, kind, subject, body, sent_at):
+    conn = connect()
+    try:
+        conn.execute(
+            "INSERT INTO sent_mail(person_id, kind, subject, body, sent_at) "
+            "VALUES (?,?,?,?,?)", (pid, kind, subject, body, sent_at))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def get_person(pid):
     conn = connect()
     try:
@@ -360,6 +384,14 @@ def get_person(pid):
             for x in conn.execute(
                 "SELECT * FROM mail_event WHERE person_id=? "
                 "ORDER BY occurred_at DESC LIMIT 50",
+                (pid,),
+            ).fetchall()
+        ]
+        person["sent_mail"] = [
+            dict(x)
+            for x in conn.execute(
+                "SELECT id, kind, subject, body, sent_at FROM sent_mail "
+                "WHERE person_id=? ORDER BY sent_at, id",
                 (pid,),
             ).fetchall()
         ]
