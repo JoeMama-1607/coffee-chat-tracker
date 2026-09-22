@@ -219,12 +219,11 @@ def outreach(person, settings, slot_lines, mine=None, theirs=None, today=None):
     if person.get("referred_by_name"):
         intro += (" I spoke with %s recently, and they suggested I reach out "
                   "to you." % person["referred_by_name"])
-    paragraphs.append(intro)
-
+    # The background from Settings continues the same paragraph — a space
+    # after "...student at Goizueta.", not a new paragraph.
     has_hook = bool(matching.email_hooks(ground))
     pitch = pitch_line(settings, mine, person, has_hook)
-    if pitch:
-        paragraphs.append(pitch)
+    paragraphs.append((intro + " " + pitch).strip() if pitch else intro)
 
     paragraphs.append(opening_line(person, mine, theirs, ground))
 
