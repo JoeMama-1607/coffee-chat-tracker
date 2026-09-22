@@ -129,28 +129,216 @@ def _earliest_roles(profile):
     return sorted(roles, key=lambda r: r["start"])
 
 
-def common_ground(mine, theirs):
-    """Ranked, each with the phrase the email can use. Strongest first."""
-    found = []
+# ------------------------------------------------------------ hook evidence
+#
+# What actually earned the opening hook in five real sent emails (Sep 2026):
+#
+#   Eklavaya  ZS, ~4 yrs, India      -> "just over 4 years ... lower end of the
+#                                        spectrum ... I am in a similar position"
+#   Jenna     Fiserv HR, ~4 yrs, US  -> same experience-length hook
+#   Shivaan   sports media, India    -> "interesting albeit non-traditional
+#                                        background, and as an international"
+#   Akshansh  Aptiv algorithms ->
+#             NVIDIA PM internship   -> "Tech background as well ... went back
+#                                        into Tech"
+#   Exaucee   Oracle, ~3 yrs         -> "Tech background as well with about 3
+#                                        years of experience ... similar position"
+#
+# Present on the page but never used: a shared country (three of the five are
+# from India, like me — never named), skills, a contrasting discipline, the
+# Goizueta alum flag. So those stay available for the prep sheet but are not
+# email hooks. Shared employer/school never came up in the examples; they are
+# kept as hooks because they are the most specific facts two profiles can
+# share, but that ranking is untested against a real email.
 
+TECH_TITLE_WORDS = ["software", "developer", "algorithm", "sde", "programmer",
+                    "full stack", "backend", "frontend", "devops",
+                    "data engineer", "machine learning", "data scientist"]
+TECH_COMPANIES = ["flipkart", "oracle", "nvidia", "microsoft", "google",
+                  "amazon", "meta", "apple", "salesforce", "ibm", "adobe",
+                  "intel", "cisco", "sap", "infosys", "tcs", "wipro", "uber",
+                  "netflix", "linkedin", "qualcomm", "samsung", "walmart global tech"]
+# Backgrounds a consulting class reads as non-traditional. HR, ops, finance,
+# engineering are deliberately not here: Jenna (HR) got the experience hook,
+# not a non-traditional one.
+NONTRAD_WORDS = ["producer", "content", "journalist", "media", "editor",
+                 "writer", "sports", "teacher", "army", "navy", "air force",
+                 "marine", "military", "artist", "musician", "nurse",
+                 "physician", "attorney", "lawyer", "nonprofit", "non-profit"]
+STUDENT_TITLE_WORDS = ["intern", "trainee", "student", "teaching assistant",
+                       "research assistant", "laboratory assistant",
+                       "administrative assistant", "committee", "mba candidate"]
+ACADEMIC_WORDS = ["university", "college", "school of", "business school"]
+MBA_INTERN_WORDS = ["intern", "summer associate", "summer consultant", "summer"]
+
+
+def _low(text):
+    return (text or "").lower()
+
+
+def _mba_start(profile):
+    """(year, month) the MBA began, from the Goizueta education line."""
+    for entry in profile.get("education") or []:
+        if _is_home_school(entry.get("school")):
+            full = re.findall(r"(?:19|20)\d\d", entry.get("years") or "")
+            if full:
+                return (int(full[0]), 7)
+    return None
+
+
+def _mba_end_year(profile):
+    for entry in profile.get("education") or []:
+        if _is_home_school(entry.get("school")):
+            full = re.findall(r"(?:19|20)\d\d", entry.get("years") or "")
+            if len(full) > 1:
+                return int(full[-1])
+    return None
+
+
+def _is_student_role(role):
+    title, company = _low(role.get("title")), _low(role.get("company"))
+    return (any(w in title for w in STUDENT_TITLE_WORDS)
+            or any(w in company for w in ACADEMIC_WORDS))
+
+
+def pre_mba_roles(profile):
+    """Full-time jobs held before business school."""
+    cutoff = _mba_start(profile)
+    out = []
+    for role in profile.get("roles") or []:
+        start = role.get("start")
+        if not start or (cutoff and tuple(start) >= cutoff):
+            continue
+        if _is_student_role(role):
+            continue
+        out.append(role)
+    return out
+
+
+def mba_internships(profile):
+    cutoff = _mba_start(profile)
+    if not cutoff:
+        return []
+    return [r for r in profile.get("roles") or []
+            if r.get("start") and tuple(r["start"]) >= cutoff
+            and any(w in _low(r.get("title")) for w in MBA_INTERN_WORDS)]
+
+
+def experience_months(profile):
+    """Pre-MBA work experience as a class would count it: first to last month
+    at the employers where they held a full-time job, internships at those
+    same employers included (ZS 'Associate - Intern' is part of Eklavaya's
+    'just over 4 years'). Overlapping titles are not double counted."""
+    jobs = pre_mba_roles(profile)
+    tenure = {}
+    for r in jobs:
+        k = _company_key(r.get("company"))
+        tenure[k] = tenure.get(k, 0) + (r.get("months") or 0)
+    # A one-month project gig (Exaucee's Orange Sparkle Ball) is not where
+    # her "about 3 years" came from — only employers with 6+ months count.
+    keys = {k for k, m in tenure.items() if m >= 6}
+    if not keys:
+        return 0
+    cutoff = _mba_start(profile)
+    spans = [r for r in (profile.get("roles") or [])
+             if r.get("start") and _company_key(r.get("company")) in keys
+             and not (cutoff and tuple(r["start"]) >= cutoff)]
+    first = min(tuple(r["start"]) for r in spans)
+    last = max(tuple(r.get("end") or r["start"]) for r in spans)
+    return (last[0] - first[0]) * 12 + (last[1] - first[1]) + 1
+
+
+def years_phrase(months):
+    """53 -> 'just over 4 years', 33 -> 'about 3 years' — the way I say it."""
+    years, rem = divmod(months, 12)
+    if years == 0:
+        return "about %d months" % months
+    if rem == 0:
+        return "%d year%s" % (years, "" if years == 1 else "s")
+    if rem <= 6:
+        return "just over %d year%s" % (years, "" if years == 1 else "s")
+    return "about %d years" % (years + 1)
+
+
+def _is_tech_role(role):
+    title, company = _low(role.get("title")), _low(role.get("company"))
+    return (any(w in title for w in TECH_TITLE_WORDS)
+            or any(re.search(r"\b%s\b" % re.escape(c), company) for c in TECH_COMPANIES)
+            or ("product manage" in title))
+
+
+def is_tech(profile):
+    """Most of their pre-MBA months were in tech."""
+    jobs = pre_mba_roles(profile)
+    total = sum(max(r.get("months") or 0, 1) for r in jobs)
+    tech = sum(max(r.get("months") or 0, 1) for r in jobs if _is_tech_role(r))
+    return bool(total) and tech * 2 >= total
+
+
+def is_nontraditional(profile):
+    jobs = pre_mba_roles(profile)
+    total = sum(max(r.get("months") or 0, 1) for r in jobs)
+    hits = sum(max(r.get("months") or 0, 1) for r in jobs
+               if any(w in _low(r.get("title")) + " " + _low(r.get("company"))
+                      for w in NONTRAD_WORDS))
+    return bool(total) and hits * 2 >= total
+
+
+def worked_abroad(profile):
+    """Built their pre-MBA career outside the US (city/country on the roles)."""
+    blob = " ".join(_low(r.get("location")) + " " + _low(r.get("company"))
+                    for r in pre_mba_roles(profile))
+    return any(any(h in blob for h in hints) for hints in COUNTRY_HINTS.values())
+
+
+def is_year_ahead(mine, theirs):
+    """A current Goizueta student in the class above mine — the people whose
+    GCA sessions I thank in every one of the real emails."""
+    a, b = _mba_end_year(mine), _mba_end_year(theirs)
+    return bool(a and b and b == a - 1)
+
+
+def common_ground(mine, theirs):
+    """Everything the two profiles share, strongest first. Items with
+    hook=True may open an email; the rest are prep-sheet material only.
+    Every item is traceable to a line on one of the two profiles."""
+    found = []
     my_roles = mine.get("roles") or []
     their_roles = theirs.get("roles") or []
 
-    # 1. The same employer — the strongest thing two strangers can share.
+    # Shared employer — no real example yet, kept as the strongest possible tie.
     my_companies = {_company_key(r.get("company")): r.get("company")
                     for r in my_roles if r.get("company")}
     for role in their_roles:
         key = _company_key(role.get("company"))
-        if key and key in my_companies:
-            found.append({
-                "kind": "employer",
-                "weight": 100,
-                "label": "Both worked at %s" % role["company"],
-                "phrase": "we both spent time at %s" % role["company"],
-            })
+        if key and key in my_companies and not _is_home_school(role.get("company")):
+            found.append({"kind": "employer", "weight": 100, "hook": True,
+                          "label": "Both worked at %s" % role["company"],
+                          "company": role["company"]})
             break
 
-    # 2. The same university, not counting the one you are both at now.
+    my_tech, their_tech = is_tech(mine), is_tech(theirs)
+    my_months, their_months = experience_months(mine), experience_months(theirs)
+
+    # Same background, and they went back into it for the MBA internship
+    # (Akshansh: Aptiv -> NVIDIA PM intern).
+    if my_tech and their_tech:
+        back = [r for r in mba_internships(theirs) if _is_tech_role(r)]
+        if back:
+            found.append({"kind": "arc", "weight": 95, "hook": True,
+                          "label": "Tech before the MBA, back into tech at %s"
+                                   % back[0].get("company"),
+                          "company": back[0].get("company")})
+
+    # Non-traditional background + built it abroad (Shivaan: sports media, Mumbai).
+    if is_nontraditional(theirs):
+        intl = worked_abroad(theirs)
+        found.append({"kind": "nontrad", "weight": 90 if intl else 55,
+                      "hook": True, "international": intl,
+                      "label": "Non-traditional background%s"
+                               % (", built abroad" if intl else "")})
+
+    # Shared school, not counting Goizueta.
     my_schools = {_school_key(e.get("school")): e.get("school")
                   for e in (mine.get("education") or [])
                   if e.get("school") and not _is_home_school(e.get("school"))}
@@ -160,65 +348,62 @@ def common_ground(mine, theirs):
             continue
         key = _school_key(school)
         if key and key in my_schools:
-            found.append({
-                "kind": "school",
-                "weight": 90,
-                "label": "Both studied at %s" % school,
-                "phrase": "we were both at %s" % school,
-            })
+            found.append({"kind": "school", "weight": 85, "hook": True,
+                          "label": "Both studied at %s" % school, "school": school})
             break
 
-    # 3. The same country behind you.
-    my_country = country_of(mine)
-    their_country = country_of(theirs)
+    # Same background (Akshansh, Exaucee: "Tech background as well").
+    if my_tech and their_tech:
+        found.append({"kind": "discipline", "weight": 80, "hook": True,
+                      "label": "Both came from tech", "discipline": "tech"})
+
+    # Similar, short-ish experience (Eklavaya, Jenna, Exaucee). Both at or
+    # under ~5 years and within a year and a half of each other.
+    if my_months and their_months and their_months <= 60 \
+            and abs(my_months - their_months) <= 18:
+        found.append({"kind": "experience", "weight": 70, "hook": True,
+                      "label": "Similar experience (%s)" % years_phrase(their_months),
+                      "months": their_months,
+                      "years": years_phrase(their_months)})
+
+    # --- prep-sheet only: present in the examples, never used as a hook.
+    my_country, their_country = country_of(mine), country_of(theirs)
     if my_country and my_country == their_country and my_country != "United States":
-        found.append({
-            "kind": "country",
-            "weight": 70,
-            "label": "Both built careers in %s" % my_country,
-            "phrase": "you built your career in %s before coming here, which is "
-                      "the same move I made" % my_country,
-            "country": my_country,
-        })
+        found.append({"kind": "country", "weight": 30, "hook": False,
+                      "label": "Both built careers in %s" % my_country,
+                      "country": my_country})
 
-    # 4. The same discipline before business school.
-    my_discipline = discipline_of(mine)
-    their_discipline = discipline_of(theirs)
-    if my_discipline and my_discipline == their_discipline:
-        found.append({
-            "kind": "discipline",
-            "weight": 75,
-            "label": "Both came from %s" % DISCIPLINE_WORDS[my_discipline],
-            "phrase": "we both come from %s" % DISCIPLINE_WORDS[my_discipline],
-            "discipline": my_discipline,
-        })
-    elif my_discipline and their_discipline:
-        # Not the same, but they made the move you are trying to make.
-        found.append({
-            "kind": "pivot",
-            "weight": 60,
-            "label": "%s to %s" % (DISCIPLINE_WORDS.get(my_discipline, "their field"),
-                                   DISCIPLINE_WORDS[their_discipline]),
-            "phrase": "you moved from %s into %s" % (
-                DISCIPLINE_WORDS.get(my_discipline, "another field"),
-                DISCIPLINE_WORDS[their_discipline]),
-            "from": my_discipline,
-            "to": their_discipline,
-        })
+    my_discipline, their_discipline = discipline_of(mine), discipline_of(theirs)
+    if my_discipline and their_discipline and my_discipline != their_discipline:
+        found.append({"kind": "pivot", "weight": 20, "hook": False,
+                      "label": "%s to %s" % (DISCIPLINE_WORDS[my_discipline],
+                                             DISCIPLINE_WORDS[their_discipline]),
+                      "from": my_discipline, "to": their_discipline})
 
-    # 5. Overlapping skills, when nothing better turned up.
     my_skills = {s.lower() for s in (mine.get("skills") or [])}
     shared = [s for s in (theirs.get("skills") or []) if s.lower() in my_skills]
     if shared:
-        found.append({
-            "kind": "skills",
-            "weight": 40,
-            "label": "Shared skills: %s" % ", ".join(shared[:3]),
-            "phrase": "we have both worked in %s" % shared[0],
-        })
+        found.append({"kind": "skills", "weight": 10, "hook": False,
+                      "label": "Shared skills: %s" % ", ".join(shared[:3]),
+                      "phrase": "we have both worked in %s" % shared[0]})
 
     found.sort(key=lambda item: -item["weight"])
     return found
+
+
+def email_hooks(ground):
+    """The one or two facts the opening paragraph uses.
+
+    Only tech background + similar experience ever appeared together
+    (Exaucee); every other real email used exactly one fact."""
+    hooks = [g for g in ground if g.get("hook")]
+    if not hooks:
+        return []
+    top = hooks[0]
+    if top["kind"] == "discipline":
+        exp = next((g for g in hooks if g["kind"] == "experience"), None)
+        return [top, exp] if exp else [top]
+    return [top]
 
 
 def conversation_angles(mine, theirs, person=None):
@@ -237,7 +422,7 @@ def conversation_angles(mine, theirs, person=None):
         kind = item["kind"]
 
         if kind == "employer":
-            company = item["label"].replace("Both worked at ", "")
+            company = item["company"]
             angles.append({
                 "label": item["label"],
                 "note": "The strongest opening you have. Shared ground with a "
@@ -248,7 +433,7 @@ def conversation_angles(mine, theirs, person=None):
             })
 
         elif kind == "school":
-            school = item["label"].replace("Both studied at ", "")
+            school = item["school"]
             angles.append({
                 "label": item["label"],
                 "note": "Worth raising early — it explains why you picked them "
@@ -268,6 +453,44 @@ def conversation_angles(mine, theirs, person=None):
                 "question": "You built your career in %s before coming here. "
                             "What did you have to learn about US recruiting that "
                             "nobody warned you about?" % country,
+            })
+
+        elif kind == "arc":
+            angles.append({
+                "label": item["label"],
+                "note": "They started where you did and chose to go back to it "
+                        "after the MBA — ask what made them decide.",
+                "question": "You went back into tech at %s for the summer. What "
+                            "tipped that decision, and did you recruit for "
+                            "consulting along the way?" % item.get("company"),
+            })
+
+        elif kind == "nontrad":
+            angles.append({
+                "label": item["label"],
+                "note": "They had to explain an unusual background to "
+                        "consulting firms — the story they told is worth "
+                        "hearing.",
+                "question": "How did you frame your background for consulting "
+                            "interviews, and what did firms actually push on?",
+            })
+
+        elif kind == "experience":
+            angles.append({
+                "label": item["label"],
+                "note": "Close to your own experience, so their recruiting "
+                        "story maps onto yours.",
+                "question": "With %s of experience, did you feel it counted "
+                            "against you in recruiting, and how did you handle "
+                            "it?" % item["years"],
+            })
+
+        elif kind == "discipline" and item["discipline"] == "tech":
+            angles.append({
+                "label": item["label"],
+                "note": "Same starting point, so their answer maps onto yours.",
+                "question": "Coming from tech, which parts of that background "
+                            "did firms value, and which did you stop leading with?",
             })
 
         elif kind == "discipline":
@@ -300,7 +523,7 @@ def conversation_angles(mine, theirs, person=None):
                 "label": item["label"],
                 "note": "Small, but concrete — it shows you read past the "
                         "headline.",
-                "question": item["phrase"].capitalize() +
+                "question": item["phrase"][0].upper() + item["phrase"][1:] +
                             ". Does any of that still come up in your work now?",
             })
 
