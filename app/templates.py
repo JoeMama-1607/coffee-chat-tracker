@@ -16,6 +16,26 @@ The rules the wording follows came from feedback on a real outreach email:
     information out of a conversation they enjoy having.
   * Dates without brackets, one time format throughout.
 
+Shape and voice follow five real emails sent in September 2026 (see
+matching.py for which fact each one led with):
+
+  Hi <first>,  /  I hope you're doing well!
+  I'm a first-year MBA student at Goizueta. [Thanks for what they've shared,
+    when they are a second-year.]
+  Before business school, I worked as <Title> at <Company>. Now at Goizueta
+    I'm exploring consulting, and I'd love to hear about your experience.
+  I see that <one fact>. I would love to chat with you to discuss how you
+    navigated <the recruiting process | the journey> and your MBA
+    experience in general.
+  Would you be open to a coffee chat, either virtually or on campus, in the
+    next <week | couple of weeks>? ... windows work on my end:
+  • <Month D, Weekday>: <h:mmam – h:mmpm> ET      <- timezone on every line
+  Happy to work around whatever is easiest for you. [Resume.] I will send you
+    the calendar invite once we finalize the time.
+  Thank you for considering, and I look forward to connecting!
+
+Never recite their career back to them, and one ask sentence, not three.
+
 Nothing is signed off. The body stops after its last line and leaves a blank
 one, so the signature Outlook adds — sign-off included — follows on cleanly.
 Two sign-offs in one message looks careless.
@@ -45,38 +65,45 @@ def _finish(paragraphs):
     return "\n\n".join(p for p in paragraphs if p) + "\n\n"
 
 
-def _slot_block(slot_lines, tz_label=""):
-    """The lead-in already says which time zone these are in, so the label is
-    stripped off each line — one format throughout, no 'ET' twice."""
-    cleaned = []
+def _slot_block(slot_lines, tz_label="ET"):
+    """One bullet per day, each carrying its own timezone label — the way
+    the Akshansh email does it ("September 24, Thursday: 2:30pm – 4:30pm ET"),
+    rather than one "(all times ET)" stated once up front."""
+    label = (tz_label or "").strip()
+    out = []
     for line in slot_lines:
         text = line.rstrip()
-        if tz_label and text.endswith(" " + tz_label):
-            text = text[: -(len(tz_label) + 1)].rstrip()
-        cleaned.append(text)
-    return "\n".join("• " + line for line in cleaned)
+        if label and not text.endswith(" " + label):
+            text += " " + label
+        out.append("• " + text)
+    return "\n".join(out)
+
+
+MONTHS = ["january", "february", "march", "april", "may", "june", "july",
+          "august", "september", "october", "november", "december"]
+
+
+def _horizon(slot_lines, today=None):
+    """'in the next week' when every slot is within 7 days, else 'in the next
+    couple of weeks' — the real emails switch between the two exactly this way."""
+    import datetime
+    today = today or datetime.date.today()
+    furthest = 0
+    for line in slot_lines:
+        m = re.match(r"\s*([A-Za-z]+)\s+(\d{1,2})", line)
+        if not m or m.group(1).lower() not in MONTHS:
+            return "in the next couple of weeks"
+        month, day = MONTHS.index(m.group(1).lower()) + 1, int(m.group(2))
+        year = today.year + (1 if month < today.month - 6 else 0)
+        try:
+            delta = (datetime.date(year, month, day) - today).days
+        except ValueError:
+            return "in the next couple of weeks"
+        furthest = max(furthest, delta)
+    return "in the next week" if furthest <= 7 else "in the next couple of weeks"
 
 
 # ------------------------------------------------------------- the sentences
-
-def _their_current(theirs):
-    roles = theirs.get("roles") or []
-    if not roles:
-        return None
-    return next((r for r in roles if r.get("current")), roles[0])
-
-
-def _years_at(theirs, company_key):
-    months = sum(r.get("months") or 0
-                 for r in (theirs.get("roles") or [])
-                 if matching._company_key(r.get("company")) == company_key)
-    if months >= 12:
-        years = months // 12
-        return "%d year%s" % (years, "" if years == 1 else "s")
-    if months:
-        return "%d months" % months
-    return ""
-
 
 def _article(word):
     return "an" if (word or "")[:1].lower() in "aeiou" else "a"
@@ -87,194 +114,136 @@ def _is_internship(role):
     return "intern" in title or "trainee" in title
 
 
-def _career_clause(theirs):
-    """'you spent six years at Aptiv, most recently as Senior Algorithm
-    Developer' — built from the employer they actually gave the most time to,
-    which is more telling than whatever is listed first."""
-    roles = [r for r in (theirs.get("roles") or [])
-             if r.get("company") and not _is_internship(r)]
-    if not roles:
-        return ""
-
-    # The employer with the most months behind it is the real story.
-    totals = {}
-    for role in roles:
-        key = matching._company_key(role.get("company"))
-        if key:
-            totals[key] = totals.get(key, 0) + (role.get("months") or 0)
-    if not totals:
-        return ""
-    anchor_key = max(totals.items(), key=lambda kv: kv[1])[0]
-    anchor_roles = [r for r in roles
-                    if matching._company_key(r.get("company")) == anchor_key]
-    anchor_roles.sort(key=lambda r: r.get("start") or (0, 0), reverse=True)
-    anchor = anchor_roles[0]
-
-    span = _years_at(theirs, anchor_key)
-    clause = ("you spent %s at %s" % (span, anchor["company"])) if span \
-        else ("you were at %s" % anchor["company"])
-    if anchor.get("title"):
-        clause += ", most recently as %s %s" % (_article(anchor["title"]), anchor["title"])
-
-    # Where they went next, if it is a real move rather than a summer
-    # internship — including a move too new for LinkedIn to have a date for
-    # yet, which is exactly when naming it matters most.
-    later = [r for r in roles
-             if matching._company_key(r.get("company")) != anchor_key
-             and (r.get("current")
-                  or (r.get("start") and anchor.get("start") and r["start"] > anchor["start"]))]
-    if later:
-        later.sort(key=lambda r: (bool(r.get("current")), r.get("start") or (0, 0)), reverse=True)
-        nxt = later[0]
-        if nxt.get("title"):
-            clause += ", before moving to %s as %s %s" % (
-                nxt["company"], _article(nxt["title"]), nxt["title"])
-        else:
-            clause += ", before moving to %s" % nxt["company"]
-    return clause
-
-
-def _tie_sentence(item):
-    """One clause naming what the two of you share. Never claims more than the
-    two profiles actually say."""
+def _tie_sentence(item, standalone=True):
+    """The fact itself, phrased the way I actually write it. Never claims
+    more than the two profiles say (the Akshansh email also said he 'went
+    through the consulting process' — that came from a conversation, not the
+    profile, so it is not generated)."""
     kind = item["kind"]
     if kind == "employer":
-        return "we both spent time at %s" % item["label"].replace("Both worked at ", "")
+        return "we both spent time at %s" % item["company"]
     if kind == "school":
-        return "we were both at %s" % item["label"].replace("Both studied at ", "")
-    if kind == "country":
-        return ("you built your career in %s before coming here, which is the "
-                "same move I made" % item["country"])
+        return "we were both at %s" % item["school"]
+    if kind == "arc":
+        return "you come from a Tech background as well and went back into Tech"
     if kind == "discipline":
-        return ("I come from %s as well" % matching.DISCIPLINE_WORDS[item["discipline"]])
-    if kind == "pivot":
-        return ("I am coming from %s rather than %s"
-                % (matching.DISCIPLINE_WORDS.get(item["from"], "a different field"),
-                   matching.DISCIPLINE_WORDS[item["to"]]))
-    if kind == "skills":
-        return item["phrase"]
+        return "you come from a Tech background as well"
+    if kind == "experience":
+        if standalone:
+            return ("you had %s of experience which in an MBA class would have "
+                    "been the lower end of the spectrum and I am in a similar "
+                    "position" % item["years"])
+        return "with %s of experience and I am in a similar position" % item["years"]
     return ""
 
 
 def opening_line(person, mine, theirs, ground):
-    """The lines that decide whether the rest gets read: what they have done,
-    then the one or two things that genuinely connect you to it."""
-    firm = person.get("firm") or ""
-    career = _career_clause(theirs)
+    """The hook paragraph: 'I see that <fact>.' then the single ask. Empty
+    hooks -> just the ask. No recap of their career — none of the real
+    emails does that."""
+    hooks = matching.email_hooks(ground)
+    if not hooks:
+        return ask_line(person, ground)
 
-    lead = ("I came across your profile and your path stood out to me — %s." % career
-            ) if career else (
-        "I came across your profile while looking at people at %s." % firm
-        if firm else "I came across your profile.")
-
-    ties = [_tie_sentence(item) for item in ground[:2]]
-    ties = [t for t in ties if t]
-
-    if not ties:
-        return lead + (" That is the part I would most like to hear about."
-                       if career else " I would value hearing about your path.")
-
-    if len(ties) == 1:
-        joined = ties[0]
+    top = hooks[0]
+    if top["kind"] == "nontrad":
+        sentence = "You have quite an interesting albeit non-traditional background"
+        if top.get("international"):
+            sentence += (", and as an international, I am sure you faced your "
+                         "own challenges")
+        sentence += "."
     else:
-        joined = "%s, and %s" % (ties[0], ties[1])
+        fact = _tie_sentence(top, standalone=len(hooks) == 1)
+        if len(hooks) > 1:
+            fact += " " + _tie_sentence(hooks[1], standalone=False)
+        sentence = "I see that %s." % fact
+    return sentence + " " + ask_line(person, ground)
 
-    closer = ("so that is the part I would most like to hear about."
-              if career else "which is what made me want to reach out to you.")
-    return "%s %s — %s" % (lead, joined[0].upper() + joined[1:], closer)
 
-
-def pitch_line(settings, mine):
-    """Your own background, in one sentence."""
+def pitch_line(settings, mine, person=None, has_hook=False):
+    """Your own background, then where you are now. The firm is named only
+    when no hook follows — the two earliest emails named McKinsey/Bain, the
+    three later ones let the hook carry the specifics."""
     written = (settings.get("user_pitch") or "").strip()
-    if written:
+    if not written:
+        roles = [r for r in ((mine or {}).get("roles") or []) if not _is_internship(r)]
+        if roles:
+            anchor = sorted(roles, key=lambda r: r.get("months") or 0, reverse=True)[0]
+            title = (anchor.get("title") or "").strip()
+            company = (anchor.get("company") or "").strip()
+            if title and company:
+                written = "Before business school, I worked as %s %s at %s." % (
+                    _article(title), title, company)
+            elif company:
+                written = "Before business school, I worked at %s." % company
+    if not written:
+        return ""
+    if "now at goizueta" in written.lower():
         return written
-
-    roles = [r for r in ((mine or {}).get("roles") or []) if not _is_internship(r)]
-    if roles:
-        # The job you actually held before school, not a summer placement.
-        substantive = sorted(roles, key=lambda r: r.get("months") or 0, reverse=True)
-        anchor = substantive[0]
-        title = (anchor.get("title") or "").strip()
-        company = (anchor.get("company") or "").strip()
-        if title and company:
-            return ("Before business school I was %s at %s."
-                    % (title.lower(), company))
-        if company:
-            return "Before business school I was at %s." % company
-    return ""
+    firm = (person or {}).get("firm") or ""
+    tail = " at %s" % firm if (firm and not has_hook) else ""
+    return (written + " Now at Goizueta I'm exploring consulting, and I'd love "
+            "to hear about your experience%s." % tail)
 
 
 def ask_line(person, ground):
-    """What you want out of the half hour — asked as their experience, never
-    as a plan for them to write."""
-    top = ground[0] if ground else None
-    firm = person.get("firm") or "the firm"
-
-    if top and top["kind"] == "country":
-        return ("I would love to hear how you found the move — what you wish "
-                "you had known in your first few months here, and how you "
-                "thought about the recruiting timeline once you arrived.")
-    if top and top["kind"] == "discipline":
-        return ("I would love to hear how you approached the switch — what "
-                "carried over from the technical side, what you had to build "
-                "from scratch, and how the recruiting process actually felt.")
-    if top and top["kind"] == "pivot":
-        return ("I would love to hear what the learning curve looked like for "
-                "you, and what you wish you had known when you were starting "
-                "out in it.")
-    if top and top["kind"] == "employer":
-        return ("I would love to hear how your path went after that, and what "
-                "the day to day at %s is actually like." % firm)
-    return ("I would love to hear about your experience at %s — what drew you "
-            "there, and what you wish you had known before you started." % firm)
+    """One sentence, their experience not a plan. 'the journey' when the hook
+    is a path (Shivaan, Akshansh); 'the recruiting process' otherwise."""
+    hooks = matching.email_hooks(ground)
+    topic = ("the journey" if hooks and hooks[0]["kind"] in ("arc", "nontrad")
+             else "the recruiting process")
+    return ("I would love to chat with you to discuss how you navigated %s and "
+            "your MBA experience in general." % topic)
 
 
 # ---------------------------------------------------------------- the emails
 
-def outreach(person, settings, slot_lines, mine=None, theirs=None):
+def outreach(person, settings, slot_lines, mine=None, theirs=None, today=None):
     """The first ask, written out in full."""
     mine = mine or {}
     theirs = theirs or {}
     ground = matching.common_ground(mine, theirs) if (mine and theirs) else []
+    tz = settings.get("tz_label") or "ET"
 
     paragraphs = [
         "Hi %s," % first_name(person.get("name")),
         "I hope you're doing well!",
     ]
 
+    # The Goizueta-alum flag is no longer a sentence at all: it defaulted to
+    # yes on every new person, so it read as the reason for writing when it
+    # never was. A second-year gets the thanks every real email opened with.
     intro = "I'm a first-year MBA student at Goizueta."
+    if mine and theirs and matching.is_year_ahead(mine, theirs):
+        intro += " Thank you so much for the information you have shared with us so far."
     if person.get("referred_by_name"):
         intro += (" I spoke with %s recently, and they suggested I reach out "
                   "to you." % person["referred_by_name"])
-    elif person.get("is_alum"):
-        # A real, checkable tie you already know about — worth leading with
-        # directly rather than waiting for `ground` to maybe surface it.
-        intro += (" I saw you're a fellow Goizueta alum, which is what made "
-                  "me want to reach out directly.")
-    paragraphs.append(intro + " " + opening_line(person, mine, theirs, ground))
+    paragraphs.append(intro)
 
-    pitch = pitch_line(settings, mine)
+    has_hook = bool(matching.email_hooks(ground))
+    pitch = pitch_line(settings, mine, person, has_hook)
     if pitch:
         paragraphs.append(pitch)
 
-    paragraphs.append(ask_line(person, ground))
+    paragraphs.append(opening_line(person, mine, theirs, ground))
 
     if slot_lines:
         paragraphs.append(
-            "Would you be open to a coffee chat in the next couple of weeks? "
-            "Any of the following windows work on my end (all times %s):"
-            % (settings.get("tz_label") or "ET"))
-        paragraphs.append(_slot_block(slot_lines, settings.get("tz_label") or "ET"))
+            "Would you be open to a coffee chat, either virtually or on campus, "
+            "%s? Any of the following windows work on my end:"
+            % _horizon(slot_lines, today))
+        paragraphs.append(_slot_block(slot_lines, tz))
     else:
         paragraphs.append(
-            "Would you be open to a coffee chat in the next couple of weeks? "
-            "I can work around whatever suits you.")
+            "Would you be open to a coffee chat, either virtually or on campus, "
+            "in the next couple of weeks?")
 
-    closing = ("Happy to work around whatever is easiest for you, and I'm glad "
-               "to do this virtually or on campus.")
+    closing = "Happy to work around whatever is easiest for you."
     if settings.get("resume_ready"):
         closing += " I've attached my resume for reference."
+    if slot_lines:
+        closing += " I will send you the calendar invite once we finalize the time."
     paragraphs.append(closing)
 
     paragraphs.append("Thank you for considering, and I look forward to connecting!")
@@ -299,7 +268,7 @@ def followup(person, settings, slot_lines):
         paragraphs.append(
             "If you do have half an hour in the next couple of weeks, I would "
             "still love to hear about your experience. Updated availability "
-            "below (all times %s):" % (settings.get("tz_label") or "ET"))
+            "below:")
         paragraphs.append(_slot_block(slot_lines, settings.get("tz_label") or "ET"))
     else:
         paragraphs.append(
