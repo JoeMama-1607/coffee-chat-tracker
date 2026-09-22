@@ -172,8 +172,8 @@ def outreach(person, settings, slot_lines, mine=None, theirs=None, today=None):
         intro += (" I spoke with %s recently, and they suggested I reach out "
                   "to you." % person["referred_by_name"])
     else:
-        intro += (" [One line on how you know them — thanks for what they've "
-                  "shared in GCA sessions, or where you met them.]")
+        intro += (" [One line on how you know them — It was a pleasure "
+                  "connecting with you during GCC, or where you met them.]")
 
     closing = "Happy to work around whatever is easiest for you."
     if settings.get("resume_ready"):
