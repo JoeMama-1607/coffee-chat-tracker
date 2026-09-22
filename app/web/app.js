@@ -528,20 +528,25 @@ async function openPerson(id, quiet = false) {
     </div>` : '';
 
   const hasProfile = !!(person.linkedin_raw || '').trim();
-  const needsLinkedinTitle = hasProfile ? '' : ' title="Upload their LinkedIn profile first — see Prep sheet"';
+  /* Orange = still to do, blue = done. Prep sheet and the LinkedIn upload are
+     yellow until the PDF is in. */
+  const profileTone = hasProfile ? 'primary' : 'yellow';
+  const mailBtn = (kind, draftLabel, sentLabel) => sentMail(person, kind)
+    ? `<button class="btn primary sm" data-sent="${kind}" data-id="${person.id}">${sentLabel}</button>`
+    : `<button class="btn gold sm" data-draft="${kind}" data-id="${person.id}">${draftLabel}</button>`;
 
   $('#drawer-body').innerHTML = `
     <div class="row" style="margin-bottom:16px">
-      <button class="btn primary sm" data-prep="${person.id}">Prep sheet${hasProfile ? ' ✓' : ' — start here'}</button>
-      <button class="btn ${hasProfile ? 'gold' : 'ghost'} sm" data-draft="outreach" data-id="${person.id}"${needsLinkedinTitle}>Draft outreach</button>
-      <button class="btn ${hasProfile ? '' : 'ghost'} sm" data-draft="followup" data-id="${person.id}"${needsLinkedinTitle}>Draft nudge</button>
-      <button class="btn ${hasProfile ? 'gold' : 'ghost'} sm" data-draft="thankyou" data-id="${person.id}"${needsLinkedinTitle}>Draft thank-you</button>
+      <button class="btn ${profileTone} sm" data-prep="${person.id}">Prep sheet${hasProfile ? ' ✓' : ' — start here'}</button>
+      ${mailBtn('outreach', 'Draft outreach', 'Sent outreach')}
+      ${mailBtn('followup', 'Draft nudge', 'Sent nudge')}
+      ${mailBtn('thankyou', 'Draft thank-you', 'Sent thank-you')}
       <button class="btn sm" data-slots="${person.id}">Suggest slots</button>
     </div>
 
     <div class="card" style="margin-bottom:16px;padding:12px 14px">
       <div class="row" style="gap:8px">
-        <label class="btn gold sm" style="cursor:pointer;margin:0">
+        <label class="btn ${profileTone} sm" style="cursor:pointer;margin:0">
           ${person.linkedin_raw ? 'Replace LinkedIn PDF' : 'Upload LinkedIn PDF'}
           <input type="file" accept="application/pdf,.pdf" id="d-profile-pdf"
                  data-person="${person.id}" style="display:none">
@@ -687,6 +692,39 @@ function openModal(title, html) {
 }
 function closeModal() { $('#modal').classList.remove('open'); }
 
+/* Has this kind of email gone to Outlook for them? Saved copies first; for
+   people contacted before copies were kept, fall back to the pipeline dates. */
+function sentMail(person, kind) {
+  const saved = (person.sent_mail || []).some(m => m.kind === kind);
+  if (saved) return true;
+  if (kind === 'outreach') return !!person.first_contact_at || (person.status && person.status !== 'uninitiated');
+  if (kind === 'followup') return (parseInt(person.followups_sent, 10) || 0) > 0;
+  if (kind === 'thankyou') return !!person.thankyou_sent_at;
+  return false;
+}
+
+async function openSentMail(personId, kind) {
+  const person = await api('/api/person/' + personId);
+  const labels = { outreach: 'Sent outreach', followup: 'Sent nudges', thankyou: 'Sent thank-you' };
+  const mails = (person.sent_mail || []).filter(m => m.kind === kind);
+  const when = iso => { try { return new Date(iso).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }); } catch (e) { return iso; } };
+  const list = mails.length ? mails.map((m, i) => `
+      <div class="card" style="margin-bottom:12px;padding:12px 14px">
+        <div class="row" style="margin-bottom:6px">
+          <strong style="flex:1">${esc(m.subject || '(no subject)')}</strong>
+          <span class="small faint">Opened in Outlook ${esc(when(m.sent_at))}</span>
+          <button class="btn ghost sm" data-copy-text="${esc(m.body)}">Copy</button>
+        </div>
+        <pre class="sent-body">${esc(m.body)}</pre>
+      </div>`).join('')
+    : `<div class="empty small">No copy was kept — this went out before the app started saving sent emails.</div>`;
+  openModal(labels[kind] + ' — ' + person.name, `
+    ${list}
+    ${kind === 'followup' ? `<div class="row"><button class="btn gold" id="m-another">Draft another nudge</button></div>` : ''}`);
+  const again = $('#m-another');
+  if (again) again.onclick = () => openDraft(personId, 'followup');
+}
+
 /* `slotLines`, when given, comes from the per-person picker — the draft then
    offers exactly the windows that were ticked, rather than re-deriving them. */
 async function openDraft(personId, kind, slotLines) {
@@ -707,11 +745,6 @@ async function openDraft(personId, kind, slotLines) {
     draft = await api('/api/draft', 'POST', payload);
   } catch (e) { closeModal(); return toast(e.message, true); }
 
-  if (draft.needs_linkedin) {
-    closeModal();
-    toast(draft.error || 'Upload their LinkedIn profile before drafting anything for them', true);
-    return openPrep(personId);
-  }
 
   const gapNote = draft.unfilled && draft.unfilled.length
     ? `<div class="banner warn"><strong>${draft.unfilled.length} thing${draft.unfilled.length > 1 ? 's' : ''} still to write.</strong>
@@ -1260,6 +1293,7 @@ function paintSuggestSlots(person, data, picked) {
       <button class="btn primary" id="slot-save">Save for ${esc(person.name.split(' ')[0])}</button>
       <button class="btn" id="slot-copy">Copy for email</button>
       <button class="btn" id="slot-draft">Use in outreach draft</button>
+      ${sentMail(person, 'outreach') ? '<button class="btn" id="slot-nudge">Use in nudge draft</button>' : ''}
     </div>
     <p class="small faint" style="margin:6px 0 0">Saving blocks these windows in Apple
       Calendar as <strong>busy</strong> holds under ${esc(person.name)}'s name, and they're
@@ -1403,6 +1437,11 @@ function paintSuggestSlots(person, data, picked) {
     if (!lines.length) return toast('Tick at least one window first', true);
     await persist();
     openDraft(person.id, 'outreach', lines);
+  };
+  if ($('#slot-nudge')) $('#slot-nudge').onclick = async () => {
+    if (!lines.length) return toast('Tick at least one window first', true);
+    await persist();
+    openDraft(person.id, 'followup', lines);
   };
 
 }
@@ -1768,7 +1807,7 @@ async function testOutlook() {
 }
 
 document.addEventListener('click', async (ev) => {
-  const t = ev.target.closest('[data-view], [data-open], [data-prep], [data-slots], [data-pdf], [data-draft], [data-status], [data-copy-text], [data-delnote], [data-goto], [data-resolve], [data-restore]');
+  const t = ev.target.closest('[data-view], [data-open], [data-prep], [data-slots], [data-pdf], [data-draft], [data-sent], [data-status], [data-copy-text], [data-delnote], [data-goto], [data-resolve], [data-restore]');
   if (!t) return;
 
   if (t.dataset.resolve) {
@@ -1801,6 +1840,7 @@ document.addEventListener('click', async (ev) => {
   if (t.dataset.slots) return openSuggestSlots(parseInt(t.dataset.slots, 10));
   if (t.dataset.open) return openPerson(parseInt(t.dataset.open, 10));
   if (t.dataset.draft) return openDraft(parseInt(t.dataset.id, 10), t.dataset.draft);
+  if (t.dataset.sent) return openSentMail(parseInt(t.dataset.id, 10), t.dataset.sent);
   if (t.dataset.copyText !== undefined) {
     return toast(await copyText(t.dataset.copyText)
       ? 'Question copied' : 'Could not copy — select the text manually', false);

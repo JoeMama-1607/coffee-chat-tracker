@@ -211,6 +211,9 @@ h3 { font-size: 15px; margin: 0 0 8px; font-weight: 620; }
 .btn.primary:hover { background: var(--navy-500); border-color: var(--navy-500); }
 .btn.gold { background: var(--gold-500); border-color: var(--gold-500); color: #2b1d00; }
 .btn.gold:hover { background: var(--gold-600); border-color: var(--gold-600); }
+.btn.yellow { background: #fde68a; border-color: #f5c518; color: #3d2e00; }
+.btn.yellow:hover { background: #fcd34d; border-color: #e0b000; }
+.sent-body { white-space: pre-wrap; font-family: var(--sans); font-size: 13px; margin: 0; }
 .btn.ghost { border-color: transparent; background: transparent; color: var(--text-muted); }
 .btn.ghost:hover { background: var(--surface-2); color: var(--text); }
 .btn.danger { color: var(--danger); border-color: var(--border); }
