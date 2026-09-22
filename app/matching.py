@@ -131,25 +131,23 @@ def _earliest_roles(profile):
 
 # ------------------------------------------------------------ hook evidence
 #
-# What actually earned the opening hook in five real sent emails (Sep 2026):
+# What earned the opening hook in real sent outreach emails:
 #
-#   Eklavaya  ZS, ~4 yrs, India      -> "just over 4 years ... lower end of the
-#                                        spectrum ... I am in a similar position"
-#   Jenna     Fiserv HR, ~4 yrs, US  -> same experience-length hook
-#   Shivaan   sports media, India    -> "interesting albeit non-traditional
-#                                        background, and as an international"
-#   Akshansh  Aptiv algorithms ->
-#             NVIDIA PM internship   -> "Tech background as well ... went back
-#                                        into Tech"
-#   Exaucee   Oracle, ~3 yrs         -> "Tech background as well with about 3
-#                                        years of experience ... similar position"
+#   ~4 yrs consulting / HR       -> similar experience length ("just over 4
+#                                   years ... lower end of the spectrum ...
+#                                   I am in a similar position")
+#   sports media, built abroad   -> "interesting albeit non-traditional
+#                                   background, and as an international"
+#   tech -> tech MBA internship  -> "Tech background as well ... went back
+#                                   into Tech"
+#   ~3 yrs tech                  -> "Tech background as well with about 3
+#                                   years of experience ... similar position"
 #
-# Present on the page but never used: a shared country (three of the five are
-# from India, like me — never named), skills, a contrasting discipline, the
-# Goizueta alum flag. So those stay available for the prep sheet but are not
-# email hooks. Shared employer/school never came up in the examples; they are
-# kept as hooks because they are the most specific facts two profiles can
-# share, but that ranking is untested against a real email.
+# Present on the page but never used: a shared country (never named), skills,
+# a contrasting discipline, the Goizueta alum flag. Those stay available for
+# the prep sheet but are not email hooks. Shared employer/school never came up
+# in the examples; they are kept as hooks because they are the most specific
+# facts two profiles can share.
 
 TECH_TITLE_WORDS = ["software", "developer", "algorithm", "sde", "programmer",
                     "full stack", "backend", "frontend", "devops",
@@ -159,7 +157,7 @@ TECH_COMPANIES = ["flipkart", "oracle", "nvidia", "microsoft", "google",
                   "intel", "cisco", "sap", "infosys", "tcs", "wipro", "uber",
                   "netflix", "linkedin", "qualcomm", "samsung", "walmart global tech"]
 # Backgrounds a consulting class reads as non-traditional. HR, ops, finance,
-# engineering are deliberately not here: Jenna (HR) got the experience hook,
+# engineering are deliberately not here: an HR background got the experience hook,
 # not a non-traditional one.
 NONTRAD_WORDS = ["producer", "content", "journalist", "media", "editor",
                  "writer", "sports", "teacher", "army", "navy", "air force",
@@ -227,15 +225,15 @@ def mba_internships(profile):
 def experience_months(profile):
     """Pre-MBA work experience as a class would count it: first to last month
     at the employers where they held a full-time job, internships at those
-    same employers included (ZS 'Associate - Intern' is part of Eklavaya's
+    same employers included (an 'Associate - Intern' stint counts toward
     'just over 4 years'). Overlapping titles are not double counted."""
     jobs = pre_mba_roles(profile)
     tenure = {}
     for r in jobs:
         k = _company_key(r.get("company"))
         tenure[k] = tenure.get(k, 0) + (r.get("months") or 0)
-    # A one-month project gig (Exaucee's Orange Sparkle Ball) is not where
-    # her "about 3 years" came from — only employers with 6+ months count.
+    # A one-month project gig is not where "about 3 years"
+    # comes from — only employers with 6+ months count.
     keys = {k for k, m in tenure.items() if m >= 6}
     if not keys:
         return 0
@@ -321,7 +319,7 @@ def common_ground(mine, theirs):
     my_months, their_months = experience_months(mine), experience_months(theirs)
 
     # Same background, and they went back into it for the MBA internship
-    # (Akshansh: Aptiv -> NVIDIA PM intern).
+    # (algorithms engineer -> tech PM internship).
     if my_tech and their_tech:
         back = [r for r in mba_internships(theirs) if _is_tech_role(r)]
         if back:
@@ -330,7 +328,7 @@ def common_ground(mine, theirs):
                                    % back[0].get("company"),
                           "company": back[0].get("company")})
 
-    # Non-traditional background + built it abroad (Shivaan: sports media, Mumbai).
+    # Non-traditional background + built it abroad (e.g. sports media, Mumbai).
     if is_nontraditional(theirs):
         intl = worked_abroad(theirs)
         found.append({"kind": "nontrad", "weight": 90 if intl else 55,
@@ -352,12 +350,12 @@ def common_ground(mine, theirs):
                           "label": "Both studied at %s" % school, "school": school})
             break
 
-    # Same background (Akshansh, Exaucee: "Tech background as well").
+    # Same background ("Tech background as well").
     if my_tech and their_tech:
         found.append({"kind": "discipline", "weight": 80, "hook": True,
                       "label": "Both came from tech", "discipline": "tech"})
 
-    # Similar, short-ish experience (Eklavaya, Jenna, Exaucee). Both at or
+    # Similar, short-ish experience. Both at or
     # under ~5 years and within a year and a half of each other.
     if my_months and their_months and their_months <= 60 \
             and abs(my_months - their_months) <= 18:
@@ -394,8 +392,8 @@ def common_ground(mine, theirs):
 def email_hooks(ground):
     """The one or two facts the opening paragraph uses.
 
-    Only tech background + similar experience ever appeared together
-    (Exaucee); every other real email used exactly one fact."""
+    Only tech background + similar experience ever appeared together;
+    every other real email used exactly one fact."""
     hooks = [g for g in ground if g.get("hook")]
     if not hooks:
         return []
