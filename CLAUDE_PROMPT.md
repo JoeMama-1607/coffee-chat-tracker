@@ -40,8 +40,10 @@ tool. For each person you want a coffee chat with, it:
    compares it with yours to find real common ground;
 2. builds a **prep sheet** — summary, career timeline, tailored questions, and
    a 30-minute plan for the call — downloadable as a PDF;
-3. writes the **outreach, nudge and thank-you emails** in full, from both
-   profiles, for you to read and send yourself (it never sends anything);
+3. drafts the **outreach, nudge and thank-you emails** — the lines that are
+   the same in every email are written out, and the parts only you can write
+   are left as **[bracketed prompts]** for you to fill in, then you send it
+   yourself (it never sends anything);
 4. finds **conflict-free times** from your Apple Calendar and formats them the
    way the GCA example email does;
 5. keeps a **pipeline** of everyone you're talking to and tells you what's due
@@ -73,8 +75,8 @@ Everything runs **locally on the Mac**. No account, no server, no cloud, no sync
 - `app/matching.py` — compares your profile with theirs to find common ground.
   Being at Goizueta together is deliberately *not* counted: it's true of
   hundreds of people and says nothing.
-- `app/templates.py` — writes the emails. Drafts are unsigned on purpose, so the
-  Outlook signature follows on cleanly.
+- `app/templates.py` — writes the emails (see "The emails" below). Drafts are
+  unsigned on purpose, so the Outlook signature follows on cleanly.
 - `app/availability.py` — turns calendar busy time into offerable windows.
 - `app/ics.py` — writes `.ics` calendar files for slot holds and confirmations.
 - `app/pdfwriter.py` — writes the prep-sheet PDF.
@@ -106,23 +108,80 @@ data; that lives in Application Support.
   LinkedIn PDF and fills in name, firm and role from it.
 - **Settings** — **You** (name, email, an **Upload your resume** button, time
   zone, target firms),
-  **Your background** (upload *your own* LinkedIn PDF, plus a one-line pitch
-  that's used word for word in outreach), **Follow-up policy**, and
+  **Your background** (upload *your own* LinkedIn PDF, plus **Your pre-MBA
+  background** — used word for word as the background paragraph of every
+  outreach draft, followed by "Now at Goizueta I'm exploring consulting, and
+  I'd love to hear about your experience."; left empty, the draft shows a
+  prompt there instead), **Follow-up policy**, and
   **Connections** (Test Apple Calendar, Test Outlook, Scan Outlook mail).
 
 Clicking a person opens their **panel**, which is where most of the work happens:
 
-- **Prep sheet** — needs their LinkedIn PDF. Summary, career timeline, questions
-  tailored from both profiles, a 30-minute plan, and a PDF download.
-- **Draft outreach / Draft nudge / Draft thank-you** — also need their PDF.
+Button colours tell you where things stand: **yellow** = their LinkedIn PDF
+isn't in yet, **orange** = still to do, **blue** = done.
+
+- **Prep sheet** — the only feature that needs their LinkedIn PDF. Summary,
+  career timeline, questions tailored from both profiles, a 30-minute plan, and
+  a PDF download. Yellow until the PDF is in, then blue.
+- **Upload LinkedIn PDF** — yellow until uploaded; then blue and renamed
+  **Replace LinkedIn PDF**.
+- **Draft outreach / Draft nudge / Draft thank-you** — work with or without
+  their PDF. Orange until the email is opened in Outlook with **Open draft in
+  Outlook**; then the button turns blue and reads **Sent outreach / Sent nudge /
+  Sent thank-you**, and clicking it shows the exact email that went to Outlook
+  (every nudge is kept, with **Draft another nudge**). "Sent" means handed to
+  Outlook — the app can't see whether they actually pressed Send. People
+  contacted before this feature show "Sent" with a note that no copy was kept.
 - **Suggest slots** — conflict-free windows from Apple Calendar. Tick the ones to
-  offer, **Request 3 more days** to look further ahead, then save them for that
-  person, copy them, or put them in the outreach draft. **Download .ics holds**
-  blocks those windows in Apple Calendar as *busy*, so nothing else gets booked
-  there and the slot finder won't offer them to anyone else.
-- **Confirm** — once they agree a time: sets the chat date, moves them to
-  "Chat scheduled", and downloads a calendar file that confirms the chosen time
-  and cancels the other holds.
+  offer (start/end times can be adjusted), **Request 3 more days** to look
+  further ahead, then **Save**, **Copy for email**, **Use in outreach draft**, or
+  — once outreach has gone out — **Use in nudge draft**. Saving writes *busy*
+  holds straight into Apple Calendar under that person's name, so the slot
+  finder never offers the same time to someone else.
+- **Confirm** — once they agree a time: removes the other holds from Apple
+  Calendar, creates the "Coffee chat — <name>" event, sets the chat date and
+  moves them to "Chat scheduled". The chat card then offers **Reschedule** and
+  **Cancel chat**.
+
+## The emails
+
+Every outreach draft has the same shape (it was learned from real emails that
+worked):
+
+```
+Subject: Coffee Chat Request - <your first name>, Goizueta MBA
+
+Hi <first name>,
+I hope you're doing well!
+I'm a first-year MBA student at Goizueta. [One line on how you know them]
+<Settings background, or a prompt> Now at Goizueta I'm exploring consulting,
+  and I'd love to hear about your experience.
+[The one thing on their profile that made you reach out, starting with "I see
+  that…". Found on their profile: …] I would love to chat with you to discuss
+  how you navigated the recruiting process and your MBA journey in general.
+Would you be open to a coffee chat in the next week? Any of the following
+  windows work on my end:
+• September 24, Thursday: 2:30pm – 4:30pm ET      (time zone on every line)
+Happy to work around whatever is easiest for you. I've attached my resume for
+  reference. I will send you the calendar invite once we finalize the time.
+Thank you for considering, and I look forward to connecting!
+```
+
+- "Found on their profile" lists what the two LinkedIn profiles share — same
+  employer or school, a similar background and experience length, a
+  non-traditional path, going back into their old field. It's a hint only;
+  they write the sentence. Without both PDFs the hint is left out.
+- If someone referred them, the "how you know them" prompt is replaced by
+  "I spoke with <name> recently, and they suggested I reach out to you."
+- "next week" becomes "next couple of weeks" when the slots go further out.
+- The resume sentence only appears when a resume is uploaded.
+- The **nudge** has no prompts: a short fixed follow-up ("I wanted to follow up
+  on my earlier email about a coffee chat…") with fresh slots.
+- The **thank-you** has prompts for what was discussed and what they'll do
+  differently. It fills the first one from any "takeaway" notes on the person.
+- Leftover [brackets] don't block anything: the draft window counts them and
+  turns the Outlook button orange ("Open in Outlook (2 unfilled)"), but will
+  still open the draft. Tell them to read the draft before sending.
 
 ## Getting LinkedIn profiles in
 
@@ -157,7 +216,9 @@ Mac only. Emails and prep sheets are much better once *both* profiles are in.
 | No time slots found | Their rules are too tight, or calendar access was declined. | Widen working hours or look further ahead; check the Calendar permission; Settings → Test Apple Calendar. |
 | Slots ignore their classes | Their schedule isn't in the Calendar app. | Add that calendar account to the Calendar app. |
 | Drafts don't open in Outlook | New Outlook, or Automation permission declined. | Settings → Test Outlook. Use Copy instead. |
-| "Upload their LinkedIn profile first" | Drafts and prep sheets need the other person's PDF. | Save their profile to PDF on LinkedIn and upload it in their panel. |
+| Prep sheet button is yellow / "start here" | The prep sheet needs the other person's PDF. Emails don't. | Save their profile to PDF on LinkedIn and upload it in their panel. |
+| Brackets like [One line on…] in the draft | Those are the parts only they can write. | Replace each one before clicking Open draft in Outlook. |
+| "Found on their profile" is missing from the draft | Their PDF, or their own PDF in Settings → Your background, isn't uploaded — or the two profiles share nothing the app recognises. | Upload both profiles; otherwise just write the hook themselves. |
 | Resume isn't attached to a draft | No resume uploaded, or it was removed. The email only mentions a resume when one is on file. | Settings → You → **Upload your resume** (PDF or Word, under 10 MB). |
 | The PDF uploaded but little was read | Not a LinkedIn "Save to PDF" file, or an unusual layout. | Re-download it with Save to PDF from the profile itself. |
 | Red bar: "Lost contact with the app" | The app's background server stopped. | Click Reload; if that fails, quit and reopen the app. Nothing already saved is lost. |
@@ -191,14 +252,14 @@ parts below, but check the files themselves, because they are the truth. Then:
 | Part | Why it matters |
 |---|---|
 | **Standard library only** | The app runs on a private copy of Python with no extra packages. Adding any `pip` dependency breaks the app for them, and for anyone they share it with. Don't. |
-| `app/db.py` — the schema and `MIGRATIONS` | This is their real data. Never drop or rename a column or table. Add new columns only by appending to `MIGRATIONS`, which upgrades existing databases in place. |
+| `app/db.py` — the schema and `MIGRATIONS` | This is their real data. Never drop or rename a column or table. Add new columns only by appending to `MIGRATIONS`, which upgrades existing databases in place. New tables use `CREATE TABLE IF NOT EXISTS` (like `sent_mail`, the saved copies behind the "Sent…" buttons). |
 | The API between `app/web/app.js` and `app/server.py` | Endpoint paths and JSON field names must change on both sides together, or buttons will fail. |
 | The `X-CCT-Token` check in `server.py` | Stops other web pages from reaching the app. Every request from the page must send it; plain links to `/api/…` can't, which is why stored files open via `openStoredFile()`. Don't remove the check. |
 | `/api/ping`, `/api/close` and the heartbeat | How the app quits when its window closes. Break them and it either never quits or quits while still in use. |
-| `app/pdfreader.py` and `app/profile.py` | LinkedIn PDF parsing. Prep sheets, all three email drafts, common-ground matching and Add person all rely on it. |
-| `app/matching.py` → `app/templates.py` | The emails are assembled from what the two profiles share. Changing matching changes every draft. Drafts are deliberately left unsigned so the Outlook signature follows on. |
+| `app/pdfreader.py` and `app/profile.py` | LinkedIn PDF parsing. Prep sheets, the "Found on their profile" hint in outreach, common-ground matching and Add person all rely on it. |
+| `app/matching.py` → `app/templates.py` | `common_ground()` decides what the outreach hint and the prep-sheet angles say. Changing it changes both. The bracket prompts are deliberate — `templates.unfilled()` and the draft window count anything in [square brackets], so don't use square brackets in fixed wording. Drafts are left unsigned so the Outlook signature follows on. |
 | `resume_attachment()` in `server.py` | The single source for whether a resume exists. The "I've attached my resume" sentence and the actual attachment both depend on it, so they can never disagree. Keep it that way. |
-| `app/availability.py` and `app/ics.py` | Holds are written **busy** (`TRANSP:OPAQUE`) on purpose, so the slot finder never offers the same time to two people. Making them free brings back double-booking. |
+| `app/availability.py`, `app/ics.py`, `app/scripts/calendar_sync.js` | Holds are written **busy** on purpose, so the slot finder never offers the same time to two people. Making them free brings back double-booking. Holds are found again by their title prefix and exact times, so renaming them in Calendar detaches them from the app. |
 | `app/macos.py` and `app/scripts/` | AppleScript is checked when it runs: one unknown Outlook term breaks the whole script, not just one line. New Outlook has no scripting at all. |
 | `install.command` and `launcher.sh` | The protected-folder check exists because macOS silently blocks the app in Documents, Desktop, Downloads and iCloud Drive. The launcher finds its folder from where it sits. Changing either can stop the app starting. |
 | `CFBundleIdentifier` in `Info.plist` | macOS remembers the Calendar permission by this. Changing it makes the app ask again, and can orphan the old permission. |
