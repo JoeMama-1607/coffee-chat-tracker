@@ -261,14 +261,24 @@ def scan_outlook(days_back=30, max_messages=400):
 
 
 def _html_body(text):
-    """The blank lines between paragraphs, and the single line breaks inside
-    the slot list, only survive in Outlook's `content` property (HTML) if
-    they are spelled out as markup — a raw "\\n\\n" is just whitespace to an
-    HTML renderer and collapses to one run-on paragraph, which is why the
-    rich fallback script used to come out unformatted."""
+    """Turn the draft, exactly as it stands in the box, into the markup an
+    Outlook message body needs.
+
+    An Outlook draft is an HTML message even when the text handed to it is
+    plain, so a bare "\\n" is only whitespace to it: blank lines between
+    paragraphs vanish and the slot bullets run into one line. The body is
+    therefore re-read every time the draft is opened — blank-line-separated
+    blocks become paragraphs, single line breaks inside a block (the slot
+    list) become <br> — so edits made in the box keep their shape."""
     escaped = (text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
-    paragraphs = [p for p in escaped.split("\n\n") if p.strip("\n")]
-    return "".join("<p>%s</p>" % p.replace("\n", "<br>") for p in paragraphs)
+    blocks = [b for b in escaped.split("\n\n") if b.strip()]
+    out = []
+    for block in blocks:
+        lines = [l for l in block.split("\n") if l.strip()]
+        out.append("<p>%s</p>" % "<br>".join(lines))
+    # A trailing empty paragraph keeps Outlook's own signature clear of the
+    # last line instead of butting up against it.
+    return "".join(out) + "<p></p>"
 
 
 def draft_email(to_address, to_name, subject, body, attachment=""):
@@ -282,14 +292,17 @@ def draft_email(to_address, to_name, subject, body, attachment=""):
         attachment = ""
     attach_arg = os.path.expanduser(attachment) if attachment else ""
 
-    # The plain script keeps the line breaks verbatim via `plain text
-    # content`; the rich fallback only has the HTML `content` property, so it
-    # needs the paragraph breaks marked up or they disappear on open.
+    # `content` (HTML) first. `plain text content` does compile on classic
+    # Outlook, so it used to win the race — but the draft it creates is still
+    # an HTML message, so every paragraph break in it collapsed and the email
+    # arrived as one block. The marked-up body is the one that keeps its
+    # shape; the plain script stays as a fallback for builds without the
+    # `content` term.
     bodies = {"outlook_draft_plain.applescript": body,
               "outlook_draft.applescript": _html_body(body)}
 
     errors = []
-    for script in ("outlook_draft_plain.applescript", "outlook_draft.applescript"):
+    for script in ("outlook_draft.applescript", "outlook_draft_plain.applescript"):
         args = [to_address, to_name, subject, bodies[script], attach_arg]
         try:
             _run(["osascript", _script(script)] + args, DETECT_TIMEOUT)

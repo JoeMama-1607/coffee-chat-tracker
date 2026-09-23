@@ -2093,6 +2093,19 @@ document.addEventListener('click', async (ev) => {
   if (id === 'btn-test-calendar' || id === 'btn-side-cal') return testCalendar();
   if (id === 'btn-test-outlook' || id === 'btn-side-outlook') return testOutlook();
 
+  if (id === 'btn-cal-pull') {
+    try {
+      const res = await api('/api/calendar/pull', 'POST', {});
+      const n = res.changes.length;
+      toast(n ? `Updated from Calendar: ${res.changes.map(c => c.name).join(', ')}`
+              : 'Already matches your calendar');
+      await refresh();
+    } catch (e) {
+      toast(e.message || String(e), true);
+    }
+    return;
+  }
+
   if (id === 'btn-sync-outlook') {
     $('#conn-result').innerHTML = '<div class="banner info">Scanning your mailbox — this can take a minute…</div>';
     try {
