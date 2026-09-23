@@ -77,6 +77,78 @@ def _sync_holds(person, settings, old_windows, new_windows):
         return {"ok": False, "deleted": 0, "created": 0, "error": str(exc)}
 
 
+def _days_from_windows(windows, tz):
+    """Group (start, end) pairs into the slot finder's day/window structure."""
+    days = {}
+    for start, end in sorted(windows):
+        ls, le = start.astimezone(tz), end.astimezone(tz)
+        day = days.setdefault(ls.date(), {
+            "date": ls.date().isoformat(),
+            "label": availability.fmt_day(ls.date()),
+            "windows": []})
+        day["windows"].append({
+            "start": ls.isoformat(), "end": le.isoformat(),
+            "text": "%s – %s" % (availability.fmt_time(ls), availability.fmt_time(le)),
+            "minutes": int((le - ls).total_seconds() // 60)})
+    return [days[k] for k in sorted(days)]
+
+
+def pull_from_calendar(settings):
+    """Make the tracker match edits made directly in Apple Calendar.
+
+    Holds titled `<hold_prefix> — <name>` become that person's saved slots
+    (moved, added or deleted in Calendar), and a moved `Coffee chat — <name>`
+    event moves the chat. Nothing on the calendar is changed.
+    """
+    tz = availability.get_tz(settings.get("timezone", "America/New_York"))
+    now = dt.datetime.now(tz)
+    events = macos.read_calendar(now - dt.timedelta(days=1),
+                                 now + dt.timedelta(days=90)).get("events", [])
+    parsed = []
+    for ev in events:
+        s, e = availability.parse_iso(ev.get("start")), availability.parse_iso(ev.get("end"))
+        if s and e and not ev.get("all_day"):
+            parsed.append(((ev.get("title") or "").strip(), s, e))
+
+    changes = []
+    tz_label = settings.get("tz_label", "ET")
+    for person in db.list_people():
+        name = person.get("name") or ""
+        if not name:
+            continue
+        hold = _hold_title(person, settings)
+        found = sorted({(s, e) for t, s, e in parsed if t == hold and e > now})
+        saved = [w for w in _offered_windows(person) if w[1] > now]
+        same = (len(found) == len(saved)
+                and all(any(_same(f, w) for w in saved) for f in found))
+        if not same and (found or saved):
+            if found:
+                days = _days_from_windows(found, tz)
+                payload = json.dumps({
+                    "lines": availability.format_slot_lines(days, tz_label),
+                    "days": days})
+                db.update_person(person["id"], {
+                    "offered_slots": payload, "offered_slots_at": now.isoformat()})
+                changes.append({"name": name, "kind": "slots",
+                                "lines": availability.format_slot_lines(days, tz_label)})
+            else:
+                db.update_person(person["id"], {"offered_slots": "", "offered_slots_at": None})
+                changes.append({"name": name, "kind": "slots_cleared", "lines": []})
+
+        chat = _chat_title(person)
+        chats = sorted(s for t, s, e in parsed if t.startswith(chat))
+        current = _chat_start(person, tz)
+        if chats and current and current > now - dt.timedelta(hours=1):
+            nearest = min(chats, key=lambda s: abs((s - current).total_seconds()))
+            if abs((nearest - current).total_seconds()) >= 60:
+                db.update_person(person["id"], {
+                    "chat_at": nearest.astimezone(tz).replace(tzinfo=None).isoformat()})
+                changes.append({"name": name, "kind": "chat_moved",
+                                "lines": ["%s %s" % (availability.fmt_day(nearest.astimezone(tz).date()),
+                                                     availability.fmt_time(nearest.astimezone(tz)))]})
+    return {"ok": True, "changes": changes}
+
+
 def _chat_title(person):
     name = person.get("name") or ""
     return "Coffee chat — %s" % name if name else "Coffee chat"
@@ -1050,6 +1122,12 @@ class Handler(BaseHTTPRequestHandler):
             _outlook_status = macos.detect_outlook()
             _outlook_status["checked"] = True
             return self._json({"ok": True, "outlook": _outlook_status})
+
+        if path == "/api/calendar/pull":
+            try:
+                return self._json(pull_from_calendar(settings))
+            except macos.BridgeError as exc:
+                return self._error(str(exc), 502)
 
         if path == "/api/detect-calendar":
             global _calendar_status
