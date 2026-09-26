@@ -34,6 +34,10 @@ ROOT = os.path.join(os.path.dirname(HERE), "research")
 INBOX = os.path.join(ROOT, "inbox")
 DONE = os.path.join(ROOT, "imported")
 
+# Set by server.py: make_draft(person_id, kind, subject, body) -> dict, and
+# slot_lines(person) -> list | None. Kept as hooks to avoid a circular import.
+HOOKS = {"make_draft": None, "slot_lines": None}
+
 # Person columns a research file may set directly.
 ALLOWED = {"email", "firm", "role", "office", "linkedin", "grad_year", "is_alum",
            "tier", "source", "contact_channel", "priority_note"}
@@ -91,8 +95,21 @@ def _one(path, people, stamp):
                              mail.get("sent_at") or stamp)
             have.add(key)
             added += 1
-    return {"file": os.path.basename(path), "person_id": pid, "name": name,
-            "created": created, "sent_emails_added": added}
+    result = {"file": os.path.basename(path), "person_id": pid, "name": name,
+              "created": created, "sent_emails_added": added}
+    # "outlook_draft": {"kind": "outreach"|"thankyou", "subject", "body"} —
+    # opens a real Outlook draft (never sent). {{SLOTS}} / {{HORIZON}} are
+    # filled from the windows saved on the person in the app.
+    od = data.get("outlook_draft")
+    if od:
+        if HOOKS["make_draft"] is None:
+            raise RuntimeError("Outlook drafting unavailable")
+        res = HOOKS["make_draft"](pid, od.get("kind", "outreach"),
+                                  od.get("subject", ""), od.get("body", ""))
+        if not res.get("ok"):
+            raise RuntimeError(res.get("error") or "Outlook draft failed")
+        result["outlook_draft"] = {k: v for k, v in res.items() if k != "ok"}
+    return result
 
 
 def import_inbox():
@@ -133,6 +150,7 @@ def write_snapshot():
         row = {k: p.get(k) for k in keep}
         row["has_prep"] = bool((p.get("prep_md") or "").strip())
         row["has_draft"] = bool((p.get("draft_body") or "").strip())
+        row["saved_slots"] = (HOOKS["slot_lines"](p) if HOOKS["slot_lines"] else None) or []
         rows.append(row)
     tmp = os.path.join(ROOT, "people.json.tmp")
     with open(tmp, "w", encoding="utf-8") as fh:

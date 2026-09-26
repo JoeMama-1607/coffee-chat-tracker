@@ -448,6 +448,57 @@ def stored_slot_lines(person, today=None):
     return fresh or None
 
 
+def outlook_draft_for(pid, kind, subject, body):
+    """Claude's outreach / thank-you, opened as an Outlook draft (never sent).
+
+    Outreach needs windows saved on the person first — the email must offer
+    exactly the holds on the calendar. Status and clocks move the same way as
+    when the draft is opened from the interface.
+    """
+    settings = db.get_settings()
+    person = db.get_person(pid)
+    if not person:
+        return {"ok": False, "error": "person not found"}
+    if kind not in ("outreach", "thankyou"):
+        return {"ok": False, "error": "kind must be outreach or thankyou"}
+    lines = stored_slot_lines(person) if kind == "outreach" else None
+    if kind == "outreach" and not lines:
+        return {"ok": False, "error": "no slots saved for %s yet — pick them in "
+                "Suggest slots and save, then refresh" % person["name"]}
+    tz_label = settings.get("tz_label") or "ET"
+    text = body or ""
+    if kind == "outreach":
+        text = text.replace("{{HORIZON}}", templates._horizon(lines))
+        text = text.replace("{{SLOTS}}", templates._slot_block(lines, tz_label))
+    subject = subject or templates._subject(settings)
+    left = templates.unfilled(text)
+    if left:
+        return {"ok": False, "error": "unfilled placeholders: %s" % left}
+    attachment = resume_attachment(settings) if kind == "outreach" else ""
+    try:
+        result = macos.draft_email(person.get("email", ""), person.get("name", ""),
+                                   subject, text, attachment)
+    except macos.BridgeError as exc:
+        return {"ok": False, "error": str(exc)}
+    stamp = dt.datetime.now(
+        availability.get_tz(settings.get("timezone", "America/New_York"))).isoformat()
+    patch = {"last_outbound_at": stamp}
+    if kind == "outreach":
+        patch.update({"draft_subject": subject, "draft_body": body})
+        if person.get("status") == "uninitiated":
+            patch.update({"status": "outreach_sent", "first_contact_at": stamp})
+    else:
+        patch.update({"status": "thankyou_sent", "thankyou_sent_at": stamp})
+    db.update_person(pid, patch)
+    db.add_sent_mail(pid, kind, subject, text, stamp)
+    return {"ok": True, "kind": kind, "slots": lines or [],
+            "attached_resume": bool(attachment), "demo": bool(result.get("demo"))}
+
+
+research.HOOKS["make_draft"] = outlook_draft_for
+research.HOOKS["slot_lines"] = lambda p: stored_slot_lines(p)
+
+
 def roll_finished_chats(people, settings):
     """A scheduled chat whose slot has come and gone is a chat you have had.
 
@@ -599,6 +650,10 @@ def state_payload():
     # Research files Claude dropped in research/inbox/ land on the next refresh.
     with _import_lock:
         imported = research.import_inbox()
+        try:
+            research.write_snapshot()
+        except OSError:
+            pass
     people = db.list_people()
     if roll_finished_chats(people, settings):
         people = db.list_people()   # re-read so everything below sees the move
