@@ -17,6 +17,7 @@ A file looks like:
   "prep_md": "...",                       # prep sheet, markdown
   "draft_subject": "...",
   "draft_body": "... {{HORIZON}} ... {{SLOTS}} ...",
+  "require_existing": true,              # refuse to create a new person
   "sent_emails": [{"kind": "outreach", "subject": "", "body": "...", "sent_at": "2026-09-22"}]
 }
 Only the keys present are written, so a file can update one part.
@@ -60,6 +61,9 @@ def _one(path, people, stamp):
         raise ValueError("no name")
     person = _find(people, name, data.get("match_linkedin"))
     patch = {k: v for k, v in (data.get("person") or {}).items() if k in ALLOWED}
+    if person is None and data.get("require_existing"):
+        raise LookupError("no one called %r in the tracker — fix the name "
+                          "or drop require_existing" % name)
     if person is None:
         pid = db.create_person(dict(patch, name=name))
         created = True

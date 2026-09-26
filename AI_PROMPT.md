@@ -1,10 +1,11 @@
-# Coffee Chat Tracker: instructions for Claude
+# Coffee Chat Tracker: instructions for your AI assistant
 
-*For the classmate: open the **Claude desktop app** on your Mac, start a new
-task in **Cowork**, and make sure it's linked to this computer. Attach
-`CoffeeChatTracker.tgz` and this file, then send: "Set up Coffee Chat Tracker
-for me using CLAUDE_PROMPT.md." After it's set up, you can keep using the same
-task to ask questions or request changes.*
+*For the classmate: use an AI assistant that can work with files on your Mac,
+for example the Claude desktop app (a Cowork task linked to this computer),
+Claude Code, Codex or Cursor. A plain chat website can't install anything.
+Give it `CoffeeChatTracker.tgz` and this file, then say: "Set up Coffee Chat
+Tracker for me using AI_PROMPT.md." After it's set up, keep using the same
+conversation to ask questions or request changes.*
 
 ---
 
@@ -31,14 +32,23 @@ to click, and wait until they confirm.
 
 ### What you need
 
-- A link to their Mac, with tools that reach it: a shell and folder access
-  (`device_bash`, `device_request_folder_access` or similar). If you don't
-  have these, say so plainly. They must open this task in the Claude desktop
-  app and choose to link it to this computer. Don't continue without it: no
-  cloud copy of the app can run on their Mac.
-- The `.tgz` file. If it was attached to the chat, you have a copy in your own
-  workspace. If it's only on their Mac (usually in Downloads), you'll reach it
-  through the folder you ask for in step 1.
+- **A way to reach their Mac.** You need to read and write files there and
+  run commands. That can mean a shell running directly on the Mac (Claude
+  Code, Codex, Cursor and similar), or a bridge to it (for example the Claude
+  desktop app's Cowork tools: `device_bash`, `device_request_folder_access`).
+  If you can't reach their Mac at all, say so plainly and tell them what to
+  open instead. Don't continue without it: no cloud copy of the app can run
+  on their Mac.
+- **The `.tgz` file.** It's either attached to the conversation or on their
+  Mac, usually in Downloads.
+
+**If your shell runs directly on macOS** (`uname` says Darwin), setup is
+simpler. First do step 2 below (check for an existing copy). Then unpack with `tar -xzf ~/Downloads/CoffeeChatTracker.tgz -C ~`, which
+creates `~/CoffeeChatTracker`, then run `bash ~/CoffeeChatTracker/install.command`
+yourself: it prompts for input, so answer its questions, or ask them to
+double-click it. Skip steps 1, 3 and 4 below. Keep steps 2 and 5–8. Steps 1–4
+are written for a bridge whose shell is a Linux VM that can only see folders
+they've shared.
 
 ### Steps
 
