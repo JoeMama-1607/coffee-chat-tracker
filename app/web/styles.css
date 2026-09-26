@@ -427,3 +427,10 @@ mark.gap { background: rgba(242, 169, 0, .35); color: inherit; border-radius: 3p
 .chat-time input[type="date"] { width: 150px; flex: none; }
 .chat-time .tpick { flex: none; }
 .chat-time .tpick select { padding-top: 5px; padding-bottom: 5px; }
+
+/* Claude's markdown prep sheets */
+.md h2, .md h3, .md h4 { margin: 14px 0 6px; }
+.md h2:first-child, .md h3:first-child { margin-top: 0; }
+.md p { margin: 0 0 10px; }
+.md ul, .md ol { margin: 0 0 10px; padding-left: 20px; }
+.md li { margin: 3px 0; }

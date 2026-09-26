@@ -277,6 +277,8 @@ PERSON_FIELDS = [
     "thankyou_sent_at", "followups_sent", "next_action", "next_action_date",
     "linkedin_raw", "profile_updated_at", "offered_slots", "offered_slots_at",
     "profile_pdf", "archived",
+    "research_md", "research_sources", "prep_md", "draft_subject", "draft_body",
+    "researched_at",
 ]
 
 # Columns added after the first release. Existing databases are upgraded in
@@ -288,6 +290,13 @@ MIGRATIONS = [
     ("person", "offered_slots_at", "TEXT"),
     ("person", "profile_pdf", "TEXT DEFAULT ''"),
     ("person", "contact_channel", "TEXT DEFAULT ''"),
+    # Research Claude writes and the app imports (research.py).
+    ("person", "research_md", "TEXT DEFAULT ''"),
+    ("person", "research_sources", "TEXT DEFAULT ''"),
+    ("person", "prep_md", "TEXT DEFAULT ''"),
+    ("person", "draft_subject", "TEXT DEFAULT ''"),
+    ("person", "draft_body", "TEXT DEFAULT ''"),
+    ("person", "researched_at", "TEXT"),
 ]
 
 

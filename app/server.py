@@ -28,6 +28,7 @@ import matching  # noqa: E402
 import pdfreader  # noqa: E402
 import pdfwriter  # noqa: E402
 import profile as profile_reader  # noqa: E402
+import research  # noqa: E402
 import templates  # noqa: E402
 
 WEB_DIR = os.path.join(HERE, "web")
@@ -180,6 +181,7 @@ def _sync_chat(person, settings, deletes, new_window, old_start):
         return {"ok": False, "deleted": 0, "updated": 0, "created": 0, "error": str(exc)}
 _calendar_status = {"checked": False}
 _lock = threading.Lock()
+_import_lock = threading.Lock()   # research inbox; separate so it never waits on Outlook
 
 # A chat stops being "coming up" shortly before it starts and stops being "now"
 # once it has plainly run its course. Nothing else can tell the app the meeting
@@ -594,6 +596,9 @@ def probe_connections():
 
 def state_payload():
     settings = db.get_settings()
+    # Research files Claude dropped in research/inbox/ land on the next refresh.
+    with _import_lock:
+        imported = research.import_inbox()
     people = db.list_people()
     if roll_finished_chats(people, settings):
         people = db.list_people()   # re-read so everything below sees the move
@@ -609,6 +614,7 @@ def state_payload():
         "outlook": _outlook_status,
         "calendar": _calendar_status,
         "platform": {"is_mac": macos.IS_MAC, "demo": macos.DEMO},
+        "imported": imported,
     }
 
 
@@ -1105,6 +1111,8 @@ class Handler(BaseHTTPRequestHandler):
             sheet = self._prep(body, settings)
             if sheet is None:
                 return self._error("person not found", 404)
+            if sheet.get("custom"):
+                return self._error("Researched prep sheets aren't exported to PDF yet — use Copy prep sheet.", 400)
             data = pdfwriter.build_prep_pdf(sheet, settings)
             safe = "".join(c for c in sheet["person"]["name"]
                            if c.isalnum() or c in " -_").strip() or "prep"
@@ -1160,7 +1168,17 @@ class Handler(BaseHTTPRequestHandler):
                 "linkedin_raw": body.get("raw", ""),
                 "profile_updated_at": stamp,
             })
-        sheet = profile_reader.prep_sheet(person, settings, my_profile(settings))
+        if (person.get("prep_md") or "").strip():
+            # Claude's researched prep sheet replaces the generated one.
+            try:
+                sources = json.loads(person.get("research_sources") or "[]")
+            except ValueError:
+                sources = []
+            sheet = {"custom": True, "prep_md": person["prep_md"],
+                     "research_md": person.get("research_md") or "",
+                     "sources": sources, "researched_at": person.get("researched_at")}
+        else:
+            sheet = profile_reader.prep_sheet(person, settings, my_profile(settings))
         sheet["person"] = {
             "id": person["id"], "name": person["name"],
             "firm": person.get("firm", ""), "role": person.get("role", ""),
@@ -1193,6 +1211,17 @@ class Handler(BaseHTTPRequestHandler):
             draft = templates.thankyou(person, settings, body.get("highlights", ""))
         elif kind == "followup":
             draft = templates.followup(person, settings, lines or [])
+        elif (person.get("draft_body") or "").strip():
+            # Claude's researched draft. {{SLOTS}} / {{HORIZON}} take the
+            # windows picked for this person, so the email and holds agree.
+            tz_label = settings.get("tz_label") or "ET"
+            body_text = person["draft_body"]
+            body_text = body_text.replace("{{HORIZON}}", templates._horizon(lines or [])
+                                          if lines else "in the next couple of weeks")
+            body_text = body_text.replace("{{SLOTS}}", templates._slot_block(lines or [], tz_label)
+                                          if lines else "[No windows picked yet — use Suggest slots]")
+            draft = {"subject": person.get("draft_subject") or templates._subject(settings),
+                     "body": body_text}
         else:
             draft = templates.outreach(person, settings, lines or [],
                                        my_profile(settings), their_profile(person))
@@ -1240,6 +1269,10 @@ def main():
     args = parser.parse_args()
 
     db.init()
+    try:
+        research.write_snapshot()
+    except OSError:
+        pass
 
     httpd = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     _server[0] = httpd

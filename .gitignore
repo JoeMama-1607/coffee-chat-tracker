@@ -23,3 +23,6 @@ _to_delete/
 # Hold files carry real names; the packaged tgz is a build output.
 holds/
 /CoffeeChatTracker.tgz
+
+# Research on real people, written by Claude and imported by the app.
+research/

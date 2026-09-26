@@ -527,7 +527,7 @@ async function openPerson(id, quiet = false) {
       </div>
     </div>` : '';
 
-  const hasProfile = !!(person.linkedin_raw || '').trim();
+  const hasProfile = !!(person.linkedin_raw || '').trim() || !!(person.prep_md || '').trim();
   /* Orange = still to do, blue = done. Prep sheet and the LinkedIn upload are
      yellow until the PDF is in. */
   const profileTone = hasProfile ? 'primary' : 'yellow';
@@ -718,8 +718,21 @@ async function openSentMail(personId, kind) {
         <pre class="sent-body">${esc(m.body)}</pre>
       </div>`).join('')
     : `<div class="empty small">No copy was kept — this went out before the app started saving sent emails.</div>`;
+  const mine = kind === 'outreach' && (person.draft_body || '').trim() ? `
+    <h2>Claude's researched draft</h2>
+    <p class="small muted" style="margin:-4px 0 10px">Written from the research on the prep
+      sheet, in your voice. Time windows are filled in when you draft it.</p>
+    <div class="card" style="padding:12px 14px;border-left:3px solid var(--gold-500)">
+      <div class="row" style="margin-bottom:6px">
+        <strong style="flex:1">${esc(person.draft_subject || '(no subject)')}</strong>
+        <button class="btn ghost sm" data-copy-text="${esc(person.draft_body)}">Copy</button>
+      </div>
+      <pre class="sent-body">${esc(person.draft_body)}</pre>
+    </div>` : '';
   openModal(labels[kind] + ' — ' + person.name, `
+    ${mine ? '<h2 style="margin-top:0">What you sent</h2>' : ''}
     ${list}
+    ${mine}
     ${kind === 'followup' ? `<div class="row"><button class="btn gold" id="m-another">Draft another nudge</button></div>` : ''}`);
   const again = $('#m-another');
   if (again) again.onclick = () => openDraft(personId, 'followup');
@@ -811,7 +824,64 @@ function qCard(text, badge, tone = '') {
   </div>`;
 }
 
+/* Small markdown renderer for Claude's research and prep sheets: headings,
+   bullets, numbered lists, bold, italics, links, paragraphs. Escapes first. */
+function mdToHtml(text) {
+  const inline = t => esc(t)
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*\s][^*]*?)\*/g, '$1<em>$2</em>')
+    .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+  const out = [];
+  let list = null, para = [];
+  const flush = () => {
+    if (para.length) { out.push('<p>' + inline(para.join(' ')) + '</p>'); para = []; }
+    if (list) { out.push('</' + list + '>'); list = null; }
+  };
+  for (const raw of (text || '').split('\n')) {
+    const line = raw.trimEnd();
+    let m;
+    if (!line.trim()) { flush(); continue; }
+    if ((m = line.match(/^(#{1,4})\s+(.*)/))) {
+      flush();
+      const level = Math.min(m[1].length + 1, 4);
+      out.push(`<h${level}>${inline(m[2])}</h${level}>`);
+    } else if ((m = line.match(/^\s*[-*•]\s+(.*)/)) || (m = line.match(/^\s*\d+[.)]\s+(.*)/))) {
+      const kind = /^\s*\d/.test(line) ? 'ol' : 'ul';
+      if (para.length) { out.push('<p>' + inline(para.join(' ')) + '</p>'); para = []; }
+      if (list !== kind) { if (list) out.push('</' + list + '>'); out.push('<' + kind + '>'); list = kind; }
+      out.push('<li>' + inline(m[1]) + '</li>');
+    } else {
+      if (list) { out.push('</' + list + '>'); list = null; }
+      para.push(line.trim());
+    }
+  }
+  flush();
+  return out.join('\n');
+}
+
+function renderCustomPrep(prep) {
+  const sources = (prep.sources || []).length ? `
+    <h2>Sources</h2>
+    <ul class="small">${prep.sources.map(s => `<li><a href="${esc(s.url || '#')}" target="_blank"
+      rel="noreferrer">${esc(s.title || s.url)}</a>${s.note ? ' — ' + esc(s.note) : ''}</li>`).join('')}</ul>` : '';
+  const when = prep.researched_at ? `<span class="small faint">Researched ${esc(dateLabel(prep.researched_at))}</span>` : '';
+  return `
+    <div class="row" style="margin-bottom:12px">
+      <span class="chip gold">Researched by Claude</span>${when}
+      <div class="spacer"></div>
+      <button class="btn ghost sm" data-copy-text="${esc(prep.prep_md)}">Copy prep sheet</button>
+    </div>
+    <div class="card md" style="border-left:3px solid var(--gold-500);line-height:1.6">${mdToHtml(prep.prep_md)}</div>
+    ${prep.research_md ? `
+    <details class="paste-box" style="margin-top:16px">
+      <summary>Full research — their journey</summary>
+      <div class="md" style="line-height:1.6;margin-top:10px">${mdToHtml(prep.research_md)}</div>
+    </details>` : ''}
+    ${sources}`;
+}
+
 function renderPrepSheet(prep) {
+  if (prep.custom) return renderCustomPrep(prep);
   const p = prep.person;
   const link = p.linkedin
     ? `<a href="${esc(p.linkedin)}" target="_blank" rel="noreferrer">their LinkedIn profile</a>`
