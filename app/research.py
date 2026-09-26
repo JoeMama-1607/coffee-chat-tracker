@@ -36,7 +36,7 @@ DONE = os.path.join(ROOT, "imported")
 
 # Set by server.py: make_draft(person_id, kind, subject, body) -> dict, and
 # slot_lines(person) -> list | None. Kept as hooks to avoid a circular import.
-HOOKS = {"make_draft": None, "slot_lines": None}
+HOOKS = {"make_draft": None, "slot_lines": None, "save_slots": None}
 
 # Person columns a research file may set directly.
 ALLOWED = {"email", "firm", "role", "office", "linkedin", "grad_year", "is_alum",
@@ -97,6 +97,16 @@ def _one(path, people, stamp):
             added += 1
     result = {"file": os.path.basename(path), "person_id": pid, "name": name,
               "created": created, "sent_emails_added": added}
+    # "offered_slots": [{"start": iso, "end": iso}, ...] — windows Claude picked
+    # from research/calendar.json. Saved on the person exactly as if picked in
+    # Suggest slots, busy holds included. [] clears them.
+    if "offered_slots" in data:
+        if HOOKS["save_slots"] is None:
+            raise RuntimeError("slot saving unavailable")
+        res = HOOKS["save_slots"](pid, data["offered_slots"] or [])
+        if not res.get("ok"):
+            raise RuntimeError(res.get("error") or "could not save slots")
+        result["offered_slots"] = res.get("lines", [])
     # "outlook_draft": {"kind": "outreach"|"thankyou", "subject", "body"} —
     # opens a real Outlook draft (never sent). {{SLOTS}} / {{HORIZON}} are
     # filled from the windows saved on the person in the app.
@@ -157,3 +167,44 @@ def write_snapshot():
         json.dump({"at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
                    "people": rows}, fh, indent=2)
     os.replace(tmp, os.path.join(ROOT, "people.json"))
+
+
+CAL_REQUEST = os.path.join(ROOT, "calendar_request.json")
+CAL_OUT = os.path.join(ROOT, "calendar.json")
+
+
+def calendar_export(read_calendar, settings):
+    """research/calendar_request.json ({"days": 14}) asks for a calendar read.
+    The events land in research/calendar.json for Claude to choose slots
+    from; the request file is then removed."""
+    if not os.path.exists(CAL_REQUEST):
+        return None
+    try:
+        with open(CAL_REQUEST, encoding="utf-8") as fh:
+            req = json.load(fh) or {}
+    except ValueError:
+        req = {}
+    days = max(1, min(int(req.get("days") or 14), 60))
+    import availability
+    tz = availability.get_tz(settings.get("timezone", "America/New_York"))
+    now = dt.datetime.now(tz)
+    out = {"generated_at": now.isoformat(timespec="seconds"),
+           "timezone": settings.get("timezone"), "from": now.isoformat(),
+           "to": (now + dt.timedelta(days=days)).isoformat()}
+    try:
+        payload = read_calendar(now, now + dt.timedelta(days=days))
+        out.update(ok=True, events=payload.get("events", []),
+                   demo=bool(payload.get("demo")))
+    except Exception as exc:
+        out.update(ok=False, error="%s: %s" % (type(exc).__name__, exc))
+    keys = ("work_days", "work_start", "work_end", "buffer_minutes",
+            "min_window_minutes", "max_window_minutes", "max_per_day",
+            "slots_wanted", "hold_prefix", "excluded_calendars",
+            "ignore_all_day", "ignore_tentative", "tz_label")
+    out["rules"] = {k: settings.get(k) for k in keys}
+    tmp = CAL_OUT + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(out, fh, indent=2, default=str)
+    os.replace(tmp, CAL_OUT)
+    os.remove(CAL_REQUEST)
+    return out.get("ok")

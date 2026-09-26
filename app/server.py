@@ -495,6 +495,49 @@ def outlook_draft_for(pid, kind, subject, body):
             "attached_resume": bool(attachment), "demo": bool(result.get("demo"))}
 
 
+def save_offered_slots(pid, windows):
+    """Windows Claude chose, saved exactly like Suggest slots → Save."""
+    settings = db.get_settings()
+    person = db.get_person(pid)
+    if not person:
+        return {"ok": False, "error": "person not found"}
+    tz = availability.get_tz(settings.get("timezone", "America/New_York"))
+    pairs = []
+    for w in windows:
+        s_, e_ = availability.parse_iso(str(w.get("start"))), availability.parse_iso(str(w.get("end")))
+        if not s_ or not e_ or e_ <= s_:
+            return {"ok": False, "error": "bad window %r" % (w,)}
+        pairs.append((s_, e_))
+    old = _offered_windows(person)
+    calendar = _sync_holds(person, settings, old, pairs)
+    if not pairs:
+        db.update_person(pid, {"offered_slots": "", "offered_slots_at": None})
+        return {"ok": True, "lines": [], "calendar": calendar}
+    days = _days_from_windows(pairs, tz)
+    lines = availability.format_slot_lines(days, settings.get("tz_label", "ET"))
+    db.update_person(pid, {
+        "offered_slots": json.dumps({"lines": lines, "days": days}),
+        "offered_slots_at": dt.datetime.now(tz).isoformat()})
+    return {"ok": True, "lines": lines, "calendar": calendar}
+
+
+_cal_thread = [None]
+
+
+def _maybe_export_calendar():
+    """Calendar reads can take a while; never hold up the page for one."""
+    if not os.path.exists(research.CAL_REQUEST):
+        return
+    t = _cal_thread[0]
+    if t and t.is_alive():
+        return
+    t = threading.Thread(target=research.calendar_export,
+                         args=(macos.read_calendar, db.get_settings()), daemon=True)
+    _cal_thread[0] = t
+    t.start()
+
+
+research.HOOKS["save_slots"] = save_offered_slots
 research.HOOKS["make_draft"] = outlook_draft_for
 research.HOOKS["slot_lines"] = lambda p: stored_slot_lines(p)
 
@@ -654,6 +697,7 @@ def state_payload():
             research.write_snapshot()
         except OSError:
             pass
+    _maybe_export_calendar()
     people = db.list_people()
     if roll_finished_chats(people, settings):
         people = db.list_people()   # re-read so everything below sees the move
