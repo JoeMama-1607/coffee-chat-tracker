@@ -25,6 +25,15 @@
     <button class="nav-item" data-view="pipeline">
       <span>▤</span><span class="txt">Pipeline</span><span class="count" id="nav-people">0</span>
     </button>
+    <button class="nav-item" data-view="applications">
+      <span>▧</span><span class="txt">Applications</span><span class="count" id="nav-apps">0</span>
+    </button>
+    <button class="nav-item" data-view="firms">
+      <span>◆</span><span class="txt">Firms</span>
+    </button>
+    <button class="nav-item" data-view="review">
+      <span>⚑</span><span class="txt">Review</span><span class="count" id="nav-review">0</span>
+    </button>
     <button class="nav-item" data-view="settings">
       <span>⚙</span><span class="txt">Settings</span>
     </button>
@@ -59,6 +68,7 @@
       <div class="stat-row" id="stats"></div>
 
       <h2>Needs action</h2>
+      <div id="today-extra"></div>
       <div id="actions"></div>
 
       <div id="action-bin"></div>
@@ -107,6 +117,49 @@
         </table>
       </div>
       <div id="pipeline-empty"></div>
+    </section>
+
+    <!-- ------------------------------------------------ APPLICATIONS -->
+    <section class="view" id="view-applications">
+      <div class="row between">
+        <div>
+          <h1>Applications</h1>
+          <p class="lede" style="margin-bottom:16px">Every role you have applied
+            to or intend to, soonest deadline first. Overdue is red; the next
+            week is gold. Nothing here emails or reminds you — this screen and
+            Today are the only places it ever comes up.</p>
+        </div>
+        <button class="btn primary" id="btn-add-app">+ Add application</button>
+      </div>
+
+      <div class="row" style="margin-bottom:12px">
+        <input type="text" id="app-search" placeholder="Search company, role…" style="max-width:280px">
+        <select id="app-status" style="max-width:190px"><option value="">All statuses</option></select>
+        <label class="row small muted" style="gap:6px"><input type="checkbox" id="app-archived"
+          style="width:15px;height:15px"> Show archived</label>
+      </div>
+
+      <div id="app-rows"></div>
+    </section>
+
+    <!-- ------------------------------------------------------- FIRMS -->
+    <section class="view" id="view-firms">
+      <h1>Firms</h1>
+      <p class="lede">The six you are actually recruiting for. Each card opens
+        everyone you know there, everything you have learned, and what you have
+        applied to.</p>
+      <div id="firm-cards"></div>
+    </section>
+
+    <!-- ------------------------------------------------------ REVIEW -->
+    <section class="view" id="view-review">
+      <h1>Review</h1>
+      <p class="lede">What Claude read out of a transcript and is proposing to
+        change. Nothing below has touched the tracker — accept it, edit it
+        first, or throw it out.</p>
+      <div id="review-list"></div>
+      <h2>Recently decided</h2>
+      <div id="review-decided"></div>
     </section>
 
     <!-- ---------------------------------------------------- SETTINGS -->
@@ -170,6 +223,29 @@
       </div>
 
       <div class="card" style="margin-bottom:18px">
+        <h3>Resume walk</h3>
+        <p class="small muted" style="margin-top:0">The two minutes you open every
+          interview with. Saving keeps the previous version rather than replacing
+          it, so you can see how the story changed and who changed it.</p>
+        <label class="field"><span>Current script (markdown)</span>
+          <textarea id="rw-body" rows="12" style="font-family:var(--mono);font-size:12.5px"
+            placeholder="I grew up in…&#10;&#10;At Flipkart I…"></textarea></label>
+        <div class="row" style="margin-bottom:14px">
+          <button class="btn primary" id="rw-save">Save new version</button>
+          <span class="small faint" id="rw-meta"></span>
+        </div>
+        <h4 style="margin:6px 0 8px">Coaching points</h4>
+        <div class="row" style="margin-bottom:10px">
+          <input type="text" id="rw-fb-body" placeholder="What to fix next time" style="flex:1;min-width:200px">
+          <input type="text" id="rw-fb-source" placeholder="Who said it" style="max-width:170px">
+          <button class="btn sm" id="rw-fb-add">Add</button>
+        </div>
+        <div id="rw-feedback"></div>
+        <h4 style="margin:16px 0 8px">Version history</h4>
+        <div id="rw-versions"></div>
+      </div>
+
+      <div class="card" style="margin-bottom:18px">
         <h3>Follow-up policy</h3>
         <div class="grid-3">
           <label class="field"><span>Nudge after (days)</span><input type="number" id="s-followup_after_days" min="1"></label>
@@ -205,6 +281,16 @@
     <button class="btn ghost" id="d-close">✕</button>
   </div>
   <div class="drawer-body" id="drawer-body"></div>
+</aside>
+
+<!-- ------------------------------------------------- applications / firms -->
+<div class="scrim" id="panel-scrim"></div>
+<aside class="drawer" id="panel">
+  <div class="drawer-head row between">
+    <div><h3 id="p-title" style="margin:0">—</h3><div class="small muted" id="p-sub"></div></div>
+    <button class="btn ghost" id="p-close">✕</button>
+  </div>
+  <div class="drawer-body" id="panel-body"></div>
 </aside>
 
 <!-- ------------------------------------------------------------- modal -->

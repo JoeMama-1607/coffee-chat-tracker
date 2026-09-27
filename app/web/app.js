@@ -6,8 +6,12 @@ const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 let STATE = {
   people: [], settings: {}, statuses: [], actions: [], coverage: [], questions: [],
   chats: { current: [], upcoming: [] },
+  applications: [], application_statuses: [], deadlines: [], firms: [],
+  firm_cards: [], target_firms: [], knowledge_categories: [], proposals: [],
+  proposal_batches: {}, resume_walk: { body: '', versions: [], feedback: [] },
 };
 let CURRENT = null;        // person open in the drawer
+let PANEL = null;          // { kind: 'application' | 'firm', id } behind it
 
 const STATUS_TONE = {
   tracking: '', uninitiated: '', outreach_sent: 'warn', awaiting_reply: 'warn',
@@ -152,9 +156,14 @@ async function refresh() {
   STATE = await api('/api/state');
   renderToday();
   renderPipeline();
+  renderApplications();
+  renderFirms();
+  renderReview();
   renderConnections();
   fillSettings();
+  fillResumeWalk();
   updateNavCounts();
+  if (PANEL) reopenPanel(true);
   if (CURRENT) openPerson(CURRENT.id, true);
 }
 
@@ -187,9 +196,17 @@ function renderConnections() {
 }
 
 function updateNavCounts() {
-  $('#nav-actions').textContent = STATE.actions.length;
-  $('#nav-actions').classList.toggle('hot', STATE.actions.some(a => a.urgency === 'overdue'));
+  const deadlines = STATE.deadlines || [];
+  const pending = (STATE.proposals || []).filter(p => p.status === 'pending');
+  $('#nav-actions').textContent = STATE.actions.length + deadlines.length;
+  $('#nav-actions').classList.toggle('hot',
+    STATE.actions.some(a => a.urgency === 'overdue')
+    || deadlines.some(d => d.urgency === 'overdue'));
   $('#nav-people').textContent = STATE.people.length;
+  $('#nav-apps').textContent = (STATE.applications || []).length;
+  const review = $('#nav-review');
+  review.textContent = pending.length;
+  review.classList.toggle('hot', pending.length > 0);
 }
 
 function renderToday() {
@@ -219,6 +236,24 @@ function renderToday() {
   }
   $('#today-banners').innerHTML = banners.join('');
 
+  // Deadlines and proposals are not person actions — they can't be ticked
+  // off, they go away by being dealt with — so they sit above the list
+  // rather than inside it.
+  const deadlines = STATE.deadlines || [];
+  const pending = (STATE.proposals || []).filter(p => p.status === 'pending');
+  $('#today-extra').innerHTML = [
+    pending.length ? `<div class="action today">
+      <div class="grow"><span class="who">${pending.length} proposed change${pending.length === 1 ? '' : 's'}</span>
+        <div class="detail">Read out of ${new Set(pending.map(p => p.batch_id)).size}
+          transcript${new Set(pending.map(p => p.batch_id)).size === 1 ? '' : 's'} — nothing applied yet</div></div>
+      <button class="btn gold sm" data-goto="review">Review</button></div>` : '',
+    ...deadlines.map(d => `<div class="action ${d.urgency}">
+      <div class="grow"><span class="who">${esc(d.company)}</span>
+        <span class="muted small">${d.role ? ' · ' + esc(d.role) : ''}</span>
+        <div class="detail">Application ${esc(d.detail)}${d.deadline ? ' · ' + esc(d.deadline) : ''}</div></div>
+      <button class="btn sm" data-app="${d.application_id}">Open</button></div>`),
+  ].join('');
+
   $('#actions').innerHTML = STATE.actions.length ? STATE.actions.map(a => `
     <div class="action ${a.urgency} clickable" data-open="${a.person_id}">
       <div class="grow">
@@ -233,7 +268,8 @@ function renderToday() {
       <button class="btn ghost sm" data-resolve="${esc(a.key)}"
         title="Tick this off — it goes to the bin below">Done</button>
     </div>`).join('')
-    : `<div class="card empty"><div class="big">✓</div>Nothing overdue. Good place to be.</div>`;
+    : (deadlines.length || pending.length ? ''
+      : `<div class="card empty"><div class="big">✓</div>Nothing overdue. Good place to be.</div>`);
 
   // Ticked off this session, and still recoverable until the app is closed.
   const binned = STATE.bin || [];
@@ -1719,6 +1755,543 @@ function openImport() {
   };
 }
 
+/* -------------------------------------------------------- applications */
+
+function appStatusLabel(key) {
+  const found = (STATE.application_statuses || []).find(s => s.key === key);
+  return found ? found.label : (key || '—');
+}
+
+/* How a deadline reads: nothing once it is behind you or already applied,
+   red when it has passed, gold inside the next week. */
+function deadlineTone(app) {
+  const days = app.days_to_deadline;
+  if (days == null) return '';
+  if (['applied', 'interview_r1', 'interview_r2', 'offer', 'rejected', 'withdrawn']
+      .includes(app.status)) return '';
+  if (days < 0) return 'overdue';
+  return days <= 7 ? 'soon' : '';
+}
+
+function deadlineText(app) {
+  if (!app.deadline) return 'no deadline';
+  const days = app.days_to_deadline;
+  const stamp = String(app.deadline).slice(0, 10);
+  if (days == null) return stamp;
+  if (days < 0) return `${stamp} · ${-days}d ago`;
+  if (days === 0) return `${stamp} · today`;
+  return `${stamp} · in ${days}d`;
+}
+
+function renderApplications() {
+  const sel = $('#app-status');
+  if (sel.options.length <= 1) {
+    (STATE.application_statuses || []).forEach(s => sel.add(new Option(s.label, s.key)));
+  }
+  const term = $('#app-search').value.trim().toLowerCase();
+  const want = sel.value;
+  const showArchived = $('#app-archived').checked;
+
+  const rows = (STATE.applications || []).filter(a => {
+    if (!showArchived && a.archived) return false;
+    if (want && a.status !== want) return false;
+    if (term && !`${a.company} ${a.role} ${a.office}`.toLowerCase().includes(term)) return false;
+    return true;
+  });
+
+  $('#app-rows').innerHTML = rows.length ? rows.map(a => {
+    const tone = deadlineTone(a);
+    return `<div class="app-row ${tone}${a.archived ? ' archived' : ''}" data-app="${a.id}">
+      <div class="grow" style="flex:1;min-width:0">
+        <span class="co">${esc(a.company)}</span>
+        ${a.is_target_firm ? '<span class="chip gold" style="margin-left:6px">target</span>' : ''}
+        <div class="detail small muted">${esc(a.role || 'role not set')}${a.office ? ' · ' + esc(a.office) : ''}</div>
+      </div>
+      <span class="chip ${a.status === 'offer' ? 'ok' : a.status === 'rejected' ? 'bad' : ''}">${esc(appStatusLabel(a.status))}</span>
+      <span class="due ${tone}">${esc(deadlineText(a))}</span>
+    </div>`;
+  }).join('')
+    : `<div class="card empty"><div class="big">▧</div>${(STATE.applications || []).length
+        ? 'Nothing matches those filters.'
+        : 'No applications yet. Add the ones with the nearest deadlines first.'}</div>`;
+}
+
+function openAddApplication() {
+  openModal('Add application', `
+    <div class="grid-2">
+      <label class="field"><span>Company *</span><input type="text" id="a-company" list="firm-list-6"></label>
+      <label class="field"><span>Role</span><input type="text" id="a-role" placeholder="Summer Associate"></label>
+      <label class="field"><span>Office</span><input type="text" id="a-office" placeholder="Atlanta"></label>
+      <label class="field"><span>Deadline</span><input type="date" id="a-deadline"></label>
+    </div>
+    <datalist id="firm-list-6">${(STATE.target_firms || [])
+      .map(f => `<option value="${esc(f)}"></option>`).join('')}</datalist>
+    <label class="field"><span>Job link</span><input type="text" id="a-job_url" placeholder="https://…"></label>
+    <label class="field"><span>Status</span>
+      <select id="a-status">${(STATE.application_statuses || []).map(s =>
+        `<option value="${s.key}">${esc(s.label)}</option>`).join('')}</select></label>
+    <label class="field"><span>Notes</span><textarea id="a-notes" rows="3"></textarea></label>
+    <div class="row"><button class="btn primary" id="a-save">Add</button>
+      <span class="small faint">Everything else — the JD, the documents, the dates —
+        is editable once it is open.</span></div>`);
+
+  $('#a-save').onclick = async () => {
+    const company = $('#a-company').value.trim();
+    if (!company) return toast('A company is required', true);
+    const btn = $('#a-save');
+    btn.disabled = true;
+    try {
+      const res = await api('/api/application', 'POST', {
+        company,
+        role: $('#a-role').value.trim(),
+        office: $('#a-office').value.trim(),
+        deadline: $('#a-deadline').value || null,
+        job_url: $('#a-job_url').value.trim(),
+        status: $('#a-status').value,
+        notes: $('#a-notes').value.trim(),
+      });
+      closeModal();
+      await refresh();
+      openApplication(res.application.id);
+    } finally {
+      btn.disabled = false;
+    }
+  };
+}
+
+/* ------------------------------------------------------- the side panel */
+
+function openPanel(title, sub, html) {
+  $('#p-title').textContent = title;
+  $('#p-sub').innerHTML = sub;
+  $('#panel-body').innerHTML = html;
+  $('#panel-scrim').classList.add('open');
+  $('#panel').classList.add('open');
+}
+
+function closePanel() {
+  $('#panel-scrim').classList.remove('open');
+  $('#panel').classList.remove('open');
+  PANEL = null;
+}
+
+/* After a refresh, redraw whatever the panel is showing without stealing
+   focus back from the drawer that may be sitting on top of it. */
+function reopenPanel(quiet) {
+  if (!PANEL) return;
+  if (PANEL.kind === 'application') return openApplication(PANEL.id, quiet);
+  if (PANEL.kind === 'firm') return openFirm(PANEL.id, quiet);
+}
+
+function markPanelSaved(text = 'Saved ✓', bad = false) {
+  const el = $('#p-savestate');
+  if (!el) return;
+  el.textContent = text;
+  el.style.color = bad ? 'var(--danger)' : 'var(--ok)';
+  clearTimeout(saveStateTimer);
+  saveStateTimer = setTimeout(() => {
+    const again = $('#p-savestate');
+    if (!again) return;
+    again.textContent = 'Every field saves as you leave it';
+    again.style.color = '';
+  }, bad ? 8000 : 2200);
+}
+
+/* The same deal as the person drawer: one field, on blur, and the panel is
+   not redrawn underneath whatever is being typed. */
+async function saveAppField(field, value) {
+  if (!PANEL || PANEL.kind !== 'application') return;
+  const patch = {};
+  patch[field] = value;
+  try {
+    await api('/api/application/' + PANEL.id, 'POST', patch);
+    markPanelSaved();
+    STATE = await api('/api/state');
+    renderToday();
+    renderApplications();
+    renderFirms();
+    updateNavCounts();
+  } catch (e) {
+    markPanelSaved('Not saved — ' + e.message, true);
+    toast(e.message, true);
+  }
+}
+
+async function openApplication(id, quiet = false) {
+  const app = await api('/api/application/' + id);
+  if (!app) return;
+  PANEL = { kind: 'application', id };
+  const f = (key, label, value, type = 'text') =>
+    `<label class="field"><span>${label}</span><input type="${type}" data-af="${key}" value="${esc(value || '')}"></label>`;
+
+  const firm = (STATE.firms || []).find(x => x.firm === app.target_firm);
+  const tone = deadlineTone(app);
+
+  openPanel(app.company,
+    `${esc(app.role || 'role not set')}${app.office ? ' · ' + esc(app.office) : ''}
+     <span class="chip" style="margin-left:6px">${esc(appStatusLabel(app.status))}</span>`, `
+    <div class="card" style="margin-bottom:16px;padding:12px 14px">
+      <div class="row between">
+        <div>
+          <strong style="font-size:13px">${esc(app.company)}</strong>
+          ${app.is_target_firm ? '<span class="chip gold" style="margin-left:6px">one of the six</span>' : ''}
+          <div class="small muted" style="margin-top:3px">
+            ${firm ? `${firm.people_count} in the tracker · ${firm.chatted_count} spoken with ·
+                      ${firm.knowledge.length} note${firm.knowledge.length === 1 ? '' : 's'} on file`
+                   : 'Not one of the six target firms — no firm page for it.'}</div>
+        </div>
+        ${app.target_firm ? `<button class="btn sm" data-firm="${esc(app.target_firm)}">Open ${esc(app.target_firm)} page</button>` : ''}
+      </div>
+    </div>
+
+    <h2 style="margin-top:0">Role</h2>
+    <div class="grid-2">
+      ${f('company', 'Company', app.company)}
+      ${f('role', 'Role', app.role)}
+      ${f('office', 'Office', app.office)}
+      ${f('job_url', 'Job link', app.job_url)}
+    </div>
+    <label class="field"><span>Job description</span>
+      <textarea data-af="jd_text" rows="6" style="font-family:var(--sans);font-size:13px">${esc(app.jd_text || '')}</textarea></label>
+
+    <h2>My status</h2>
+    <div class="grid-2">
+      <label class="field"><span>Status</span>
+        <select data-af="status">${(STATE.application_statuses || []).map(s =>
+          `<option value="${s.key}"${s.key === app.status ? ' selected' : ''}>${esc(s.label)}</option>`).join('')}</select></label>
+      <label class="field"><span>Archived</span>
+        <select data-af="archived">
+          <option value="0"${!app.archived ? ' selected' : ''}>No</option>
+          <option value="1"${app.archived ? ' selected' : ''}>Yes</option></select></label>
+    </div>
+    <div style="margin-bottom:18px">${(app.status_history || []).length
+      ? app.status_history.slice().reverse().map(h => `<div class="note">
+          ${esc(appStatusLabel(h.status))}
+          <div class="meta">${dateLabel(h.created_at)}${h.note ? ' · ' + esc(h.note) : ''}</div></div>`).join('')
+      : '<div class="small faint">No moves recorded yet.</div>'}</div>
+
+    <h2>Key dates</h2>
+    <div class="grid-2">
+      ${f('deadline', 'Deadline', (app.deadline || '').slice(0, 10), 'date')}
+      ${f('applied_at', 'Applied', (app.applied_at || '').slice(0, 10), 'date')}
+      ${f('interview_r1_at', 'Interview R1', (app.interview_r1_at || '').slice(0, 10), 'date')}
+      ${f('interview_r2_at', 'Interview R2', (app.interview_r2_at || '').slice(0, 10), 'date')}
+    </div>
+    ${app.deadline ? `<p class="small ${tone === 'overdue' ? '' : 'faint'}"
+      style="margin:-4px 0 16px${tone === 'overdue' ? ';color:var(--danger)' : ''}">${esc(deadlineText(app))}</p>` : ''}
+
+    <h2>Documents</h2>
+    <p class="small muted" style="margin-top:0">The tailored PDFs, wherever you keep
+      them. The app stores the path and asks macOS to open the file — it never
+      copies it, so the version you open is always the one on disk.</p>
+    <div class="grid-2">
+      ${f('resume_file', 'Resume file', app.resume_file)}
+      ${f('cover_letter_file', 'Cover letter file', app.cover_letter_file)}
+    </div>
+    <div class="row" style="margin-bottom:18px">
+      <button class="btn sm" data-open-file="resume" data-id="${app.id}">Open resume</button>
+      <button class="btn sm" data-open-file="cover_letter" data-id="${app.id}">Open cover letter</button>
+    </div>
+
+    <h2>Notes</h2>
+    <label class="field"><span></span>
+      <textarea data-af="notes" rows="5" style="font-family:var(--sans);font-size:13px">${esc(app.notes || '')}</textarea></label>
+
+    <div class="row" style="margin:4px 0 20px">
+      <span class="small muted" id="p-savestate">Every field saves as you leave it</span>
+      <div class="spacer"></div>
+      <button class="btn danger sm" id="p-delete-app">Delete</button>
+    </div>`);
+  if (quiet) { /* redrawn in place; the panel is already open */ }
+}
+
+/* ------------------------------------------------------------- firms */
+
+function renderFirms() {
+  const cards = STATE.firm_cards || [];
+  $('#firm-cards').innerHTML = `<div class="firm-grid">${cards.map(c => {
+    const days = c.next_deadline_days;
+    const due = days == null ? 'no application deadline'
+      : days < 0 ? `deadline ${-days}d ago`
+      : days === 0 ? 'deadline today'
+      : `deadline in ${days}d`;
+    return `<button class="firm-card" data-firm="${esc(c.firm)}">
+      <div class="name">${esc(c.firm)}</div>
+      <div class="line">${c.chatted_count} spoken with · ${c.people_count} in the pipeline</div>
+      <div class="line">${c.knowledge_count} note${c.knowledge_count === 1 ? '' : 's'} on file</div>
+      <div class="line" style="margin-top:6px;color:${days != null && days <= 7 ? 'var(--gold-600)' : 'var(--text-faint)'}">
+        ${c.application_count} application${c.application_count === 1 ? '' : 's'} · ${esc(due)}</div>
+    </button>`;
+  }).join('')}</div>`;
+}
+
+function knowledgeCategoryLabel(key) {
+  const found = (STATE.knowledge_categories || []).find(c => c.key === key);
+  return found ? found.label : (key || 'Other');
+}
+
+function openFirm(firm, quiet = false) {
+  const data = (STATE.firms || []).find(f => f.firm === firm);
+  if (!data) return;
+  PANEL = { kind: 'firm', id: firm };
+
+  const byCategory = {};
+  data.knowledge.forEach(k => (byCategory[k.category] = byCategory[k.category] || []).push(k));
+
+  openPanel(firm,
+    `${data.chatted_count} spoken with · ${data.people_count} in the pipeline ·
+     ${data.knowledge.length} note${data.knowledge.length === 1 ? '' : 's'}`, `
+    <h2 style="margin-top:0">People</h2>
+    ${data.people.length ? data.people.map(p => `
+      <div class="action clickable" data-open="${p.id}">
+        <div class="grow"><span class="who">${esc(p.name)}</span>
+          <span class="muted small">${p.role ? ' · ' + esc(p.role) : ''}${p.office ? ' · ' + esc(p.office) : ''}</span>
+          <div class="detail">${esc(statusLabel(p.status))}${p.chat_at ? ' · chat ' + chatTimeLabel(p.chat_at) : ''}</div>
+        </div>
+        <button class="btn sm" data-open="${p.id}">Open</button>
+      </div>`).join('')
+      : '<div class="small faint">Nobody at this firm in the tracker yet.</div>'}
+
+    <h2>Knowledge</h2>
+    <div class="card" style="margin-bottom:16px;padding:12px 14px">
+      <div class="row" style="margin-bottom:8px">
+        <select id="k-category" style="max-width:180px">${(STATE.knowledge_categories || []).map(c =>
+          `<option value="${c.key}">${esc(c.label)}</option>`).join('')}</select>
+        <select id="k-source-type" style="max-width:150px">
+          <option value="chat">From a chat</option>
+          <option value="research">From research</option>
+        </select>
+        <input type="text" id="k-source-label" placeholder="Who or where, and when" style="flex:1;min-width:160px">
+      </div>
+      <div class="row">
+        <textarea id="k-body" rows="2" placeholder="What did you learn about ${esc(firm)}?"
+          style="flex:1;min-width:220px;font-family:var(--sans);font-size:13px"></textarea>
+        <button class="btn sm" id="k-add" data-firm-add="${esc(firm)}">Add</button>
+      </div>
+    </div>
+    ${Object.keys(byCategory).length ? Object.keys(byCategory).map(cat => `
+      <h4 style="margin:14px 0 8px">${esc(knowledgeCategoryLabel(cat))}</h4>
+      ${byCategory[cat].map(k => `
+        <div class="know ${k.source_type === 'research' ? 'research' : ''}">${esc(k.body)}<div class="meta">${[
+          k.source_type === 'research' ? 'research' : 'chat',
+          k.source_person ? esc(k.source_person) : '',
+          k.source_label ? esc(k.source_label) : '',
+          k.source_url ? `<a href="${esc(k.source_url)}" target="_blank" rel="noreferrer">source</a>` : '',
+          dateLabel(k.created_at),
+        ].filter(Boolean).join(' · ')} <a href="#" data-delknow="${k.id}" style="margin-left:8px;color:var(--danger)">remove</a></div></div>`).join('')}`).join('')
+      : '<div class="small faint">Nothing on file yet. Add what you learn as you learn it.</div>'}
+
+    <h2>Applications</h2>
+    ${data.applications.length ? data.applications.map(a => `
+      <div class="app-row ${deadlineTone(a)}" data-app="${a.id}">
+        <div class="grow" style="flex:1;min-width:0">
+          <span class="co">${esc(a.role || 'role not set')}</span>
+          <div class="detail small muted">${esc(a.office || '')}</div>
+        </div>
+        <span class="chip">${esc(appStatusLabel(a.status))}</span>
+        <span class="due ${deadlineTone(a)}">${esc(deadlineText(a))}</span>
+      </div>`).join('')
+      : '<div class="small faint">No application here yet.</div>'}`);
+  if (quiet) { /* redrawn in place */ }
+}
+
+/* ------------------------------------------------------------- review */
+
+/* A line-by-line diff, longest common subsequence, so the resume walk shows
+   what actually moved rather than "the whole thing changed". */
+function diffLines(before, after) {
+  const a = String(before || '').split('\n');
+  const b = String(after || '').split('\n');
+  const grid = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+  for (let i = a.length - 1; i >= 0; i--) {
+    for (let j = b.length - 1; j >= 0; j--) {
+      grid[i][j] = a[i] === b[j] ? grid[i + 1][j + 1] + 1
+        : Math.max(grid[i + 1][j], grid[i][j + 1]);
+    }
+  }
+  const left = [], right = [];
+  let i = 0, j = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) { left.push(['same', a[i]]); right.push(['same', b[j]]); i++; j++; }
+    else if (grid[i + 1][j] >= grid[i][j + 1]) { left.push(['del', a[i]]); i++; }
+    else { right.push(['add', b[j]]); j++; }
+  }
+  while (i < a.length) left.push(['del', a[i++]]);
+  while (j < b.length) right.push(['add', b[j++]]);
+  const paint = rows => rows.map(([tone, text]) =>
+    `<div class="diff-line ${tone === 'same' ? '' : tone}">${esc(text) || '&nbsp;'}</div>`).join('');
+  return { left: paint(left), right: paint(right) };
+}
+
+/* What a proposal would change, shown before it changes anything. */
+function proposalPreview(p) {
+  const payload = p.payload || {};
+  if (p.kind === 'firm_knowledge') {
+    return `<div class="know">${esc(payload.body || '')}
+      <div class="meta">${esc(payload.firm || '')} · ${esc(knowledgeCategoryLabel(payload.category))}</div></div>`;
+  }
+  if (p.kind === 'resume_walk') {
+    if (payload.add_feedback !== undefined) {
+      return `<div class="diff-label">New coaching point</div>
+        <div class="know">${esc(payload.add_feedback)}</div>`;
+    }
+    const current = (STATE.resume_walk || {}).body || '';
+    const parts = diffLines(current, payload.new_text || '');
+    return `<div class="diff">
+      <div><div class="diff-label">Now</div>${parts.left || '<em class="faint">empty</em>'}</div>
+      <div><div class="diff-label">Proposed</div>${parts.right}</div></div>`;
+  }
+  if (p.kind === 'person_update') {
+    const who = STATE.people.find(x => x.id === p.person_id) || {};
+    return Object.keys(payload).map(key => {
+      if (key === 'takeaway') {
+        return `<div class="note takeaway">${esc(payload[key])}<div class="meta">new takeaway note</div></div>`;
+      }
+      const was = key === 'status' ? statusLabel(who[key]) : (who[key] || '—');
+      const now = key === 'status' ? statusLabel(payload[key]) : payload[key];
+      return `<div class="small"><strong>${esc(key)}</strong>:
+        <span style="text-decoration:line-through;color:var(--text-faint)">${esc(was)}</span>
+        → ${esc(now)}</div>`;
+    }).join('');
+  }
+  if (p.kind === 'application_update') {
+    const match = (STATE.applications || []).find(a =>
+      a.id === payload.match_id
+      || (a.company.toLowerCase() === String(payload.company || '').toLowerCase()
+          && (a.role || '').toLowerCase() === String(payload.role || '').toLowerCase()));
+    return `<div class="small">${match ? `Updates <strong>${esc(match.company)}</strong>
+        — ${esc(match.role || 'role not set')}` : 'Adds a new application'}:
+      ${Object.keys(payload).filter(k => k !== 'match_id')
+        .map(k => `<div><strong>${esc(k)}</strong>: ${esc(payload[k])}</div>`).join('')}</div>`;
+  }
+  return `<pre class="sent-body">${esc(JSON.stringify(payload, null, 2))}</pre>`;
+}
+
+const PROPOSAL_KIND_LABEL = {
+  firm_knowledge: 'Firm knowledge', resume_walk: 'Resume walk',
+  person_update: 'Person', application_update: 'Application',
+};
+
+function renderReview() {
+  const all = STATE.proposals || [];
+  const pending = all.filter(p => p.status === 'pending');
+  const batches = {};
+  pending.forEach(p => (batches[p.batch_id] = batches[p.batch_id] || []).push(p));
+
+  $('#review-list').innerHTML = Object.keys(batches).length
+    ? Object.keys(batches).map(batchId => {
+      const items = batches[batchId];
+      const batch = (STATE.proposal_batches || {})[batchId] || {};
+      return `<div class="batch">
+        <div class="row between" style="margin-bottom:6px">
+          <div>
+            <strong>${esc(batch.source_label || items[0].source_label || batchId)}</strong>
+            <div class="small faint">${items.length} proposed change${items.length === 1 ? '' : 's'}
+              · ${esc(batchId)}</div>
+          </div>
+          <div class="row" style="gap:6px">
+            <button class="btn gold sm" data-batch-accept="${esc(batchId)}">Accept all</button>
+            <button class="btn ghost sm" data-batch-reject="${esc(batchId)}">Reject all</button>
+          </div>
+        </div>
+        ${batch.transcript ? `<details class="paste-box" style="margin-bottom:8px">
+          <summary>Transcript</summary>
+          <pre class="sent-body" style="margin-top:10px">${esc(batch.transcript)}</pre>
+        </details>` : ''}
+        ${items.map(p => `
+          <div class="prop">
+            <div class="row between">
+              <span class="chip">${esc(PROPOSAL_KIND_LABEL[p.kind] || p.kind)}</span>
+              <span class="row" style="gap:6px">
+                <button class="btn gold sm" data-accept="${p.id}">Accept</button>
+                <button class="btn sm" data-edit-accept="${p.id}">Edit…</button>
+                <button class="btn ghost sm" data-reject="${p.id}">Reject</button>
+              </span>
+            </div>
+            ${p.rationale ? `<div class="rationale">${esc(p.rationale)}</div>` : ''}
+            ${proposalPreview(p)}
+          </div>`).join('')}
+      </div>`;
+    }).join('')
+    : `<div class="card empty"><div class="big">✓</div>Nothing waiting. Paste a
+        transcript to Claude and its proposals land here.</div>`;
+
+  const decided = all.filter(p => p.status !== 'pending').slice(0, 20);
+  $('#review-decided').innerHTML = decided.length ? decided.map(p => `
+    <div class="action low">
+      <div class="grow">
+        <span class="who">${esc(PROPOSAL_KIND_LABEL[p.kind] || p.kind)}</span>
+        <div class="detail">${esc(p.source_label || p.batch_id)}${p.rationale ? ' — ' + esc(p.rationale) : ''}</div>
+      </div>
+      <span class="chip ${p.status === 'accepted' ? 'ok' : 'bad'}">${esc(p.status)}</span>
+      <span class="small faint">${dateLabel(p.decided_at)}</span>
+    </div>`).join('')
+    : '<div class="small faint">Nothing decided yet.</div>';
+}
+
+/* Edit before accepting: the payload as JSON, because a proposal's shape
+   depends on its kind and inventing a form per kind would go stale the first
+   time a new field appears. */
+function openEditProposal(id) {
+  const prop = (STATE.proposals || []).find(p => p.id === id);
+  if (!prop) return;
+  openModal('Edit, then accept', `
+    <p class="small muted">${esc(PROPOSAL_KIND_LABEL[prop.kind] || prop.kind)} —
+      ${esc(prop.source_label || prop.batch_id)}. What you leave here is what
+      gets applied, and what Review records as having happened.</p>
+    <label class="field"><span>Payload</span>
+      <textarea id="pe-json" rows="14" style="font-family:var(--mono);font-size:12.5px">${esc(JSON.stringify(prop.payload, null, 2))}</textarea></label>
+    <div class="row"><button class="btn gold" id="pe-save">Accept with these changes</button>
+      <span class="small faint" id="pe-note"></span></div>`);
+  $('#pe-save').onclick = async () => {
+    let payload;
+    try {
+      payload = JSON.parse($('#pe-json').value);
+    } catch (e) {
+      $('#pe-note').textContent = 'That is not valid JSON yet.';
+      return;
+    }
+    await decideProposal({ id, status: 'accepted', payload });
+    closeModal();
+  };
+}
+
+async function decideProposal(body) {
+  try {
+    const res = await api('/api/proposal/decide', 'POST', body);
+    const first = (res.results || [])[0] || {};
+    toast(res.ok ? (first.applied || 'Done') : (first.error || res.error), !res.ok);
+  } catch (e) {
+    toast(e.message, true);
+  }
+  return refresh();
+}
+
+/* --------------------------------------------------------- resume walk */
+
+function fillResumeWalk() {
+  const walk = STATE.resume_walk || { versions: [], feedback: [] };
+  const box = $('#rw-body');
+  // Never overwrite what is being typed — the same rule as the drawer.
+  if (box && document.activeElement !== box) box.value = walk.body || '';
+  $('#rw-meta').textContent = walk.updated_at
+    ? `${walk.versions.length} version${walk.versions.length === 1 ? '' : 's'} ·
+       last changed ${dateLabel(walk.updated_at)}${walk.source ? ' · ' + walk.source : ''}`
+    : 'Nothing written yet.';
+
+  $('#rw-feedback').innerHTML = walk.feedback.length ? walk.feedback.map(fb => `
+    <div class="note takeaway">${esc(fb.body)}<div class="meta">${fb.source ? esc(fb.source) + ' · ' : ''}${dateLabel(fb.created_at)} <a href="#" data-delfeedback="${fb.id}" style="margin-left:8px;color:var(--danger)">remove</a></div></div>`).join('')
+    : '<div class="small faint">No coaching points yet.</div>';
+
+  $('#rw-versions').innerHTML = walk.versions.length ? walk.versions.map((v, index) => `
+    <details class="paste-box" style="margin-bottom:6px">
+      <summary>${index === 0 ? 'Current' : 'Version ' + (walk.versions.length - index)} ·
+        ${dateLabel(v.created_at)}${v.source ? ' · ' + esc(v.source) : ''}</summary>
+      <pre class="sent-body" style="margin-top:10px">${esc(v.body)}</pre>
+    </details>`).join('')
+    : '<div class="small faint">Saving the script above starts the history.</div>';
+}
+
 /* --------------------------------------------------------------- slots */
 
 function fillSettings() {
@@ -2192,8 +2765,132 @@ document.addEventListener('click', async (ev) => {
   }
 });
 
+/* ------------------------- applications, firms, review: events ---------- */
+
+document.addEventListener('click', async (ev) => {
+  const t = ev.target.closest('[data-app], [data-firm], [data-accept], [data-reject], '
+    + '[data-edit-accept], [data-batch-accept], [data-batch-reject], [data-open-file], '
+    + '[data-delknow], [data-delfeedback], [data-firm-add]');
+  const id = ev.target.id;
+
+  if (id === 'p-close' || id === 'panel-scrim') return closePanel();
+  if (id === 'btn-add-app') return openAddApplication();
+
+  if (id === 'p-delete-app') {
+    if (!PANEL || PANEL.kind !== 'application') return;
+    const btn = ev.target;
+    if (btn.dataset.armed !== '1') {
+      btn.dataset.armed = '1'; btn.textContent = 'Really delete?';
+      setTimeout(() => { btn.dataset.armed = '0'; btn.textContent = 'Delete'; }, 4000);
+      return;
+    }
+    await api('/api/application/' + PANEL.id, 'DELETE');
+    closePanel();
+    toast('Application deleted');
+    return refresh();
+  }
+
+  if (id === 'rw-save') {
+    try {
+      await api('/api/resume-walk', 'POST', { body: $('#rw-body').value, source: 'you' });
+      toast('Saved — the previous version is in the history below');
+    } catch (e) { toast(e.message, true); }
+    return refresh();
+  }
+
+  if (id === 'rw-fb-add') {
+    const body = $('#rw-fb-body').value.trim();
+    if (!body) return toast('Write the coaching point first', true);
+    try {
+      await api('/api/resume-walk/feedback', 'POST', {
+        body, source: $('#rw-fb-source').value.trim(),
+      });
+      $('#rw-fb-body').value = '';
+      $('#rw-fb-source').value = '';
+    } catch (e) { toast(e.message, true); }
+    return refresh();
+  }
+
+  if (!t) return;
+
+  if (t.dataset.firmAdd) {
+    const body = $('#k-body').value.trim();
+    if (!body) return toast('Write the note first', true);
+    try {
+      await api('/api/knowledge', 'POST', {
+        firm: t.dataset.firmAdd, category: $('#k-category').value,
+        body, source_type: $('#k-source-type').value,
+        source_label: $('#k-source-label').value.trim(),
+      });
+      toast('Added');
+    } catch (e) { toast(e.message, true); }
+    return refresh();
+  }
+
+  if (t.dataset.delknow) {
+    ev.preventDefault();
+    await api('/api/knowledge/' + t.dataset.delknow, 'DELETE');
+    return refresh();
+  }
+
+  if (t.dataset.delfeedback) {
+    ev.preventDefault();
+    await api('/api/resume-walk/feedback/' + t.dataset.delfeedback, 'DELETE');
+    return refresh();
+  }
+
+  if (t.dataset.openFile) {
+    try {
+      await api('/api/application/' + t.dataset.id + '/open', 'POST',
+                { which: t.dataset.openFile });
+      toast('Opening…');
+    } catch (e) { toast(e.message, true); }
+    return;
+  }
+
+  if (t.dataset.app) return openApplication(parseInt(t.dataset.app, 10));
+  if (t.dataset.firm) return openFirm(t.dataset.firm);
+  if (t.dataset.accept) return decideProposal({ id: parseInt(t.dataset.accept, 10), status: 'accepted' });
+  if (t.dataset.reject) return decideProposal({ id: parseInt(t.dataset.reject, 10), status: 'rejected' });
+  if (t.dataset.editAccept) return openEditProposal(parseInt(t.dataset.editAccept, 10));
+
+  if (t.dataset.batchAccept || t.dataset.batchReject) {
+    const accepting = !!t.dataset.batchAccept;
+    try {
+      const res = await api('/api/proposal/decide-batch', 'POST', {
+        batch_id: t.dataset.batchAccept || t.dataset.batchReject,
+        status: accepting ? 'accepted' : 'rejected',
+      });
+      toast(res.ok ? `${res.results.length} ${accepting ? 'applied' : 'rejected'}`
+                   : res.error, !res.ok);
+    } catch (e) { toast(e.message, true); }
+    return refresh();
+  }
+});
+
+/* Application fields save on blur, one at a time, exactly like the person
+   drawer — and for the same reason: redrawing loses what is being typed. */
+document.addEventListener('change', (ev) => {
+  const field = ev.target.closest('[data-af]');
+  if (field && $('#panel').classList.contains('open')) {
+    let value = field.value;
+    if (field.dataset.af === 'archived') value = parseInt(value, 10);
+    return saveAppField(field.dataset.af, value);
+  }
+  if (['app-status', 'app-archived'].includes(ev.target.id)) renderApplications();
+});
+
+document.addEventListener('input', (ev) => {
+  if (ev.target.id === 'app-search') renderApplications();
+});
+
 document.addEventListener('keydown', (ev) => {
-  if (ev.key === 'Escape') { closeModal(); closeDrawer(); }
+  // Close the topmost thing only, so Escape out of a person opened from a
+  // firm page leaves the firm page where it was.
+  if (ev.key !== 'Escape') return;
+  if ($('#modal').classList.contains('open')) return closeModal();
+  if ($('#drawer').classList.contains('open')) return closeDrawer();
+  return closePanel();
 });
 
 /* Nothing should ever fail in silence. */

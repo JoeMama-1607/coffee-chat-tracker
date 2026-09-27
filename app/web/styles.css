@@ -434,3 +434,62 @@ mark.gap { background: rgba(242, 169, 0, .35); color: inherit; border-radius: 3p
 .md p { margin: 0 0 10px; }
 .md ul, .md ol { margin: 0 0 10px; padding-left: 20px; }
 .md li { margin: 3px 0; }
+
+/* ------------------------------------------- applications, firms, review */
+
+/* The second panel sits under the person drawer, so opening someone from a
+   firm page layers on top of it rather than replacing it. */
+#panel { z-index: 45; }
+#panel-scrim { z-index: 42; }
+
+.app-row {
+  display: flex; align-items: center; gap: 12px; padding: 11px 14px;
+  border: 1px solid var(--border); border-left: 3px solid var(--border-strong);
+  border-radius: var(--radius-sm); background: var(--surface);
+  margin-bottom: 8px; cursor: pointer;
+}
+.app-row:hover { border-color: var(--border-strong); background: var(--surface-2); }
+.app-row.overdue { border-left-color: var(--danger); }
+.app-row.soon { border-left-color: var(--gold-500); }
+.app-row .co { font-weight: 640; }
+.app-row .due { font-variant-numeric: tabular-nums; font-size: 12.5px; white-space: nowrap; }
+.app-row .due.overdue { color: var(--danger); font-weight: 650; }
+.app-row .due.soon { color: var(--gold-600); font-weight: 650; }
+.app-row.archived { opacity: .55; }
+
+.firm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
+.firm-card {
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface);
+  padding: 15px 16px; cursor: pointer; text-align: left;
+}
+.firm-card:hover { border-color: var(--border-strong); background: var(--surface-2); }
+.firm-card .name { font-size: 16px; font-weight: 660; margin-bottom: 8px; }
+.firm-card .line { font-size: 12.5px; color: var(--text-muted); }
+
+.know {
+  border-left: 2px solid var(--gold-500); padding: 2px 0 2px 11px;
+  margin-bottom: 12px; font-size: 13px; line-height: 1.55;
+}
+.know.research { border-left-color: var(--navy-500); }
+.know .meta { font-size: 11px; color: var(--text-faint); margin-top: 3px; }
+
+/* Before and after, side by side where there is room for it. */
+.diff { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 8px 0; }
+.diff > div {
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 9px 11px; font-size: 12.5px; line-height: 1.5; white-space: pre-wrap;
+  max-height: 260px; overflow-y: auto; font-family: var(--mono);
+}
+.diff .was { background: var(--danger-bg); }
+.diff .now { background: var(--ok-bg); }
+.diff-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--text-faint); font-weight: 700; margin-bottom: 4px; }
+.diff-line.add { background: var(--ok-bg); }
+.diff-line.del { background: var(--danger-bg); text-decoration: line-through; }
+
+.batch { border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface); padding: 15px 16px; margin-bottom: 14px; }
+.prop { border-top: 1px solid var(--border); padding: 12px 0 4px; }
+.prop:first-of-type { border-top: 0; }
+.prop .rationale { font-size: 12.5px; color: var(--text-muted); margin: 4px 0 8px; }
+@media (max-width: 720px) { .diff { grid-template-columns: 1fr; } }

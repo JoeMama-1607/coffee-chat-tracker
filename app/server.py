@@ -1615,7 +1615,7 @@ def main():
 
     db.init()
     try:
-        research.write_snapshot()
+        research.write_snapshots()
     except OSError:
         pass
 
