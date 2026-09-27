@@ -199,7 +199,8 @@ function renderToday() {
   const overdue = STATE.actions.filter(a => a.urgency === 'overdue').length;
 
   $('#stats').innerHTML = [
-    { value: people.length, label: 'People tracked' },
+    // "Tracked" = everyone past Uninitiated; the rest of the pipeline stays off Today.
+    { value: people.filter(p => p.status !== 'uninitiated').length, label: 'People tracked' },
     { value: chatted, label: 'Chats completed' },
     { value: count('scheduled'), label: 'Scheduled' },
     { value: count('outreach_sent') + count('awaiting_reply'), label: 'Awaiting reply' },
@@ -359,6 +360,7 @@ let TREE_MINIMIZED = false;
 const TREE_COLLAPSED_FIRMS = new Set();
 const PRIORITY_FIRMS = ['mckinsey', 'bain', 'bcg', 'pwc', 'ey', 'kearney'];
 const STATUS_DOT = {
+  tracking: 'var(--text-faint)',
   outreach_sent: 'var(--warn)', awaiting_reply: 'var(--warn)',
   scheduled: 'var(--gold-500)',
   chat_done: 'var(--ok)', thankyou_sent: 'var(--ok)',
@@ -375,14 +377,14 @@ function renderPipelineTree() {
   // A firm's tree is for people you're actually tracking with something to
   // show — no LinkedIn on file yet, you haven't reached out at all, or you've
   // given up on them, and there's nothing here worth a branch.
-  const HIDDEN_TREE_STATUS = new Set(['tracking', 'uninitiated', 'no_response']);
+  // Everyone except "Uninitiated" and "No response" gets a branch.
+  const HIDDEN_TREE_STATUS = new Set(['uninitiated', 'no_response']);
   const eligible = STATE.people.filter(p =>
-    !HIDDEN_TREE_STATUS.has(p.status) && (p.linkedin_raw || '').trim());
+    !HIDDEN_TREE_STATUS.has(p.status));
 
   if (!eligible.length) {
     box.innerHTML = `<div class="card empty small">Nobody to show yet — a person
-      needs a LinkedIn profile on file (and a status past "Uninitiated", other
-      than "No response") to appear in the tree.</div>`;
+      needs a status other than "Uninitiated" or "No response" to appear in the tree.</div>`;
     return;
   }
 
@@ -1332,9 +1334,8 @@ async function openSuggestSlots(personId, opts = {}) {
   }
 
   if (!data.days.length) {
-    $('#m-body').innerHTML = `<div class="card empty">Every 2-hour block on the next
-      three weekdays is already saved for someone else. Try "Request 3 more days"
-      or clear an older offer.</div>`;
+    $('#m-body').innerHTML = `<div class="card empty">Every 2-hour block for the next
+      six weeks is already saved for someone else. Clear an older offer and try again.</div>`;
     return;
   }
 
@@ -1417,8 +1418,8 @@ function paintSuggestSlots(person, data, picked) {
       const last = data.days[data.days.length - 1];
       const res = await api('/api/slots', 'POST', { after: last && last.date, person_id: person.id });
       if (!res.days.length) {
-        note.textContent = 'Nothing further ahead fits — the calendar looks '
-          + 'fully booked for those days too.';
+        note.textContent = 'No open blocks in the next six weeks past these days — '
+          + 'everything is saved for someone else.';
       } else {
         // Appended, never prepended: the picked keys are positional, so
         // anything already ticked has to keep the index it was ticked under.

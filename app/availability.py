@@ -65,8 +65,8 @@ def fmt_time(moment):
 
 
 def fmt_day(day):
-    return "%s %d, %s" % (MONTH_NAMES[day.month - 1], day.day,
-                          WEEKDAY_NAMES[day.weekday()])
+    return "%s, %s %d" % (WEEKDAY_NAMES[day.weekday()],
+                          MONTH_NAMES[day.month - 1], day.day)
 
 
 def tidy_window(start, end, min_window, max_window):
@@ -265,7 +265,8 @@ def _overlaps(a_start, a_end, b_start, b_end):
     return a_start < b_end and b_start < a_end
 
 
-def find_windows(taken, rules, now=None, after=None, days_wanted=3):
+def find_windows(taken, rules, now=None, after=None, days_wanted=3,
+                 skip_full=False, max_weekdays=30):
     """Every free fixed block for the next `days_wanted` weekdays.
 
     `taken` is a list of (start, end) windows already saved for other people;
@@ -279,8 +280,10 @@ def find_windows(taken, rules, now=None, after=None, days_wanted=3):
 
     day = (after or now.date()) + dt.timedelta(days=1)
     days = []
-    while len(days) < days_wanted:
+    scanned = 0
+    while len(days) < days_wanted and scanned < max_weekdays:
         if day.weekday() < 5:
+            scanned += 1
             windows = []
             for sh, eh in FIXED_BLOCKS:
                 s = dt.datetime(day.year, day.month, day.day, sh, tzinfo=tz)
@@ -293,10 +296,12 @@ def find_windows(taken, rules, now=None, after=None, days_wanted=3):
                     "text": "%s – %s" % (fmt_time(s), fmt_time(e)),
                     "minutes": 120,
                 })
-            # A weekday counts toward the three even if every block is taken,
-            # so "next 3 weekdays" always means exactly that.
-            days.append({"date": day.isoformat(), "label": fmt_day(day),
-                         "windows": windows})
+            # With skip_full, a weekday whose blocks are all saved for others
+            # doesn't count toward the three: the search keeps walking forward
+            # (up to max_weekdays) so a busy week never hides the next one.
+            if windows or not skip_full:
+                days.append({"date": day.isoformat(), "label": fmt_day(day),
+                             "windows": windows})
         day += dt.timedelta(days=1)
     return days
 

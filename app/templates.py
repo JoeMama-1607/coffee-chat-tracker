@@ -64,6 +64,8 @@ def _slot_block(slot_lines, tz_label="ET"):
     out = []
     for line in slot_lines:
         text = line.rstrip()
+        # Older saved lines read "September 28, Monday: ..."; show "Monday, September 28: ...".
+        text = re.sub(r"^([A-Z][a-z]+ \d{1,2}), ([A-Z][a-z]+day):", r"\2, \1:", text)
         if label and not text.endswith(" " + label):
             text += " " + label
         out.append("• " + text)
@@ -75,12 +77,12 @@ MONTHS = ["january", "february", "march", "april", "may", "june", "july",
 
 
 def _horizon(slot_lines, today=None):
-    """'in the next week' when every slot is within 7 days, else 'in the next
+    """'in this week' when every slot is within 7 days, else 'in the next
     couple of weeks'."""
     today = today or datetime.date.today()
     furthest = 0
     for line in slot_lines:
-        m = re.match(r"\s*([A-Za-z]+)\s+(\d{1,2})", line)
+        m = re.match(r"\s*(?:[A-Za-z]+day,\s*)?([A-Za-z]+)\s+(\d{1,2})", line)
         if not m or m.group(1).lower() not in MONTHS:
             return "in the next couple of weeks"
         month, day = MONTHS.index(m.group(1).lower()) + 1, int(m.group(2))
@@ -90,7 +92,7 @@ def _horizon(slot_lines, today=None):
         except ValueError:
             return "in the next couple of weeks"
         furthest = max(furthest, delta)
-    return "in the next week" if furthest <= 7 else "in the next couple of weeks"
+    return "in this week" if furthest <= 7 else "in the next couple of weeks"
 
 
 def _slot_paragraphs(slot_lines, settings, today=None):

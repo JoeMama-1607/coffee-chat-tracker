@@ -323,6 +323,8 @@ def firm_coverage(people, settings):
     targets = [t.strip() for t in (settings.get("target_firms") or "").split(",") if t.strip()]
     buckets = {}
     for p in people:
+        if p.get("status") == "uninitiated":
+            continue            # Today only counts people past Uninitiated
         firm = (p.get("firm") or "Unassigned").strip()
         b = buckets.setdefault(firm, {"firm": firm, "total": 0, "chatted": 0,
                                       "scheduled": 0, "pending": 0})
@@ -625,9 +627,10 @@ def build_slots(settings, refresh_days=None, after=None, person_id=None):
         pid = int(person_id) if person_id is not None else None
     except (TypeError, ValueError):
         pid = None
+    # Fully-booked weekdays are skipped rather than counted, so "3 more days"
+    # always means 3 more days that have something open.
     days = availability.find_windows(_taken_by_others(pid), settings,
-                                     now=now, after=cutoff)
-    days = [d for d in days if d["windows"]]
+                                     now=now, after=cutoff, skip_full=True)
     lines = availability.format_slot_lines(days, settings.get("tz_label", "ET"))
     return {"days": days, "lines": lines, "event_count": 0,
             "demo": False, "note": ""}

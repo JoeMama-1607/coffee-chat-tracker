@@ -26,3 +26,6 @@ holds/
 
 # Research on real people, written by Claude and imported by the app.
 research/
+
+# Held-back research files (real names).
+research_hold/
