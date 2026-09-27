@@ -692,19 +692,165 @@ def probe_connections():
     _calendar_status = calendar
 
 
+# ------------------------------------------------------------ applications
+
+# How close a deadline has to be before Today mentions it. A fortnight is
+# noise; a day is too late to tailor anything.
+DEADLINE_WINDOW_DAYS = 7
+
+
+def application_lines(applications):
+    """The in-app deadline lines for Today. Nothing is emailed or notified —
+    this screen is the only place recruiting ever nags from."""
+    lines = []
+    for app in applications:
+        days = app.get("days_to_deadline")
+        if days is None or days > DEADLINE_WINDOW_DAYS:
+            continue
+        if app.get("status") in ("applied", "interview_r1", "interview_r2",
+                                 "offer", "rejected", "withdrawn"):
+            continue
+        if days < 0:
+            urgency, detail = "overdue", ("deadline passed %d day%s ago"
+                                          % (-days, "" if days == -1 else "s"))
+        elif days == 0:
+            urgency, detail = "overdue", "deadline is today"
+        else:
+            urgency, detail = "today", ("%d day%s to the deadline"
+                                        % (days, "" if days == 1 else "s"))
+        lines.append({
+            "application_id": app["id"], "company": app["company"],
+            "role": app.get("role") or "", "urgency": urgency,
+            "deadline": app.get("deadline"), "detail": detail,
+            "status": app.get("status"),
+        })
+    lines.sort(key=lambda l: (0 if l["urgency"] == "overdue" else 1,
+                              l["deadline"] or ""))
+    return lines
+
+
+def firm_cards(firms):
+    """The six cards on the Firms tab: who you know, and what is due."""
+    return [{"firm": f["firm"], "people_count": f["people_count"],
+             "chatted_count": f["chatted_count"],
+             "knowledge_count": len(f["knowledge"]),
+             "application_count": len(f["applications"]),
+             "next_deadline_days": f["next_deadline_days"]}
+            for f in firms]
+
+
+def apply_proposal(prop, payload):
+    """Put an accepted proposal into the tracker.
+
+    Every branch goes through the same functions the screens do — a knowledge
+    entry lands exactly as one typed on the firm page, a resume walk keeps its
+    old version, a person update is an ordinary field save. Accepting is only
+    a shortcut past the typing, never past the rules."""
+    kind = prop["kind"]
+    label = prop.get("source_label") or ""
+    pid = prop.get("person_id")
+
+    if kind == "firm_knowledge":
+        firm = db.match_target_firm(payload.get("firm"))
+        if not firm:
+            raise ValueError("%r is not one of the six target firms"
+                             % payload.get("firm"))
+        kid = db.add_knowledge(
+            firm, payload.get("category") or "other", payload.get("body") or "",
+            source_type=payload.get("source_type") or "chat",
+            source_person_id=pid, source_label=payload.get("source_label") or label,
+            source_url=payload.get("source_url") or "")
+        return ("Added to %s" % firm) if kid else ("Already on file for %s" % firm)
+
+    if kind == "resume_walk":
+        done = []
+        if payload.get("new_text") is not None:
+            db.set_resume_walk(payload["new_text"], source=label or "proposal")
+            done.append("script updated — the previous version is in the history")
+        if payload.get("add_feedback"):
+            db.add_resume_feedback(payload["add_feedback"], source=label)
+            done.append("coaching point added")
+        if not done:
+            raise ValueError("nothing to apply: expected new_text or add_feedback")
+        return "; ".join(done)
+
+    if kind == "person_update":
+        if not pid:
+            raise ValueError("this proposal is not attached to anyone in the tracker")
+        patch = {k: v for k, v in payload.items()
+                 if k in db.PERSON_FIELDS and k != "takeaway"}
+        if patch:
+            db.update_person(pid, patch)
+        if payload.get("takeaway"):
+            db.add_note(pid, payload["takeaway"], "takeaway")
+        return "Updated %s" % (db.get_person(pid) or {}).get("name", "them")
+
+    if kind == "application_update":
+        # Literally the inbox handler, so an accepted proposal and an imported
+        # application file can never drift apart.
+        res = research._application_file(dict(payload), db.list_people(True), "")
+        return ("Added %s" if res.get("created") else "Updated %s") % res["company"]
+
+    raise ValueError("unknown proposal kind %r" % kind)
+
+
+def _snapshots():
+    """Keep the agent's snapshots level with the app after every change."""
+    try:
+        research.write_snapshots()
+    except OSError as exc:
+        return {"snapshot_error": str(exc)}
+    return {}
+
+
+def decide_proposals(ids, status, payload=None):
+    """Accept or reject, one at a time, saying what each one did.
+
+    One failure doesn't stop the rest: in a batch of eight, the seven that
+    apply cleanly should still land, and the one that didn't says why and
+    stays pending for you to fix."""
+    results, applied, failed = [], 0, 0
+    for pid in ids:
+        prop = db.get_proposal(pid)
+        if not prop or prop["status"] != "pending":
+            continue
+        entry = {"id": pid, "kind": prop["kind"]}
+        if status == "accepted":
+            use = payload if payload is not None else prop["payload"]
+            try:
+                entry["applied"] = apply_proposal(prop, use)
+                db.set_proposal(pid, "accepted",
+                                payload if payload is not None else None)
+                applied += 1
+            except Exception as exc:  # noqa: BLE001 — surfaced in the UI
+                entry["error"] = "%s: %s" % (type(exc).__name__, exc)
+                failed += 1
+        else:
+            db.set_proposal(pid, "rejected")
+            entry["applied"] = "Rejected"
+        results.append(entry)
+    _snapshots()
+    return {"ok": failed == 0, "results": results, "applied": applied,
+            "failed": failed,
+            "error": ("%d of these could not be applied — they are still "
+                      "pending." % failed) if failed else None}
+
+
 def state_payload():
     settings = db.get_settings()
     # Research files Claude dropped in research/inbox/ land on the next refresh.
     with _import_lock:
         imported = research.import_inbox()
         try:
-            research.write_snapshot()
+            research.write_snapshots()
         except OSError:
             pass
     _maybe_export_calendar()
     people = db.list_people()
     if roll_finished_chats(people, settings):
         people = db.list_people()   # re-read so everything below sees the move
+    applications = db.list_applications()
+    firms = research.firms_payload()
     return {
         "settings": settings,
         "people": people,
@@ -718,6 +864,18 @@ def state_payload():
         "calendar": _calendar_status,
         "platform": {"is_mac": macos.IS_MAC, "demo": macos.DEMO},
         "imported": imported,
+        "applications": applications,
+        "application_statuses": [{"key": k, "label": l}
+                                 for k, l in db.APPLICATION_STATUSES],
+        "deadlines": application_lines(applications),
+        "firms": firms,
+        "firm_cards": firm_cards(firms),
+        "target_firms": db.TARGET_FIRMS,
+        "knowledge_categories": [{"key": k, "label": l}
+                                 for k, l in db.KNOWLEDGE_CATEGORIES],
+        "proposals": db.list_proposals(),
+        "proposal_batches": db.proposal_batches(),
+        "resume_walk": db.resume_walk(),
     }
 
 
@@ -826,6 +984,15 @@ class Handler(BaseHTTPRequestHandler):
         if len(parts) == 3 and parts[1] == "note":
             db.delete_note(int(parts[2]))
             return self._json({"ok": True})
+        if len(parts) == 3 and parts[1] == "application":
+            db.delete_application(int(parts[2]))
+            return self._json({"ok": True, **_snapshots()})
+        if len(parts) == 3 and parts[1] == "knowledge":
+            db.delete_knowledge(int(parts[2]))
+            return self._json({"ok": True, **_snapshots()})
+        if len(parts) == 4 and parts[1] == "resume-walk" and parts[2] == "feedback":
+            db.delete_resume_feedback(int(parts[3]))
+            return self._json({"ok": True, **_snapshots()})
         return self._error("unknown endpoint", 404)
 
     # -- static -----------------------------------------------------------
@@ -881,10 +1048,84 @@ class Handler(BaseHTTPRequestHandler):
             pid = int(path.rsplit("/", 1)[1])
             person = db.get_person(pid)
             return self._json(person) if person else self._error("not found", 404)
+        if path.startswith("/api/application/"):
+            app = db.get_application(int(path.rsplit("/", 1)[1]))
+            return self._json(app) if app else self._error("not found", 404)
         return self._error("unknown endpoint", 404)
 
     def _api_post(self, path, body):
         settings = db.get_settings()
+
+        # -- applications ------------------------------------------------
+        if path == "/api/application":
+            aid = db.create_application(body)
+            return self._json({"ok": True, "application": db.get_application(aid),
+                               **_snapshots()})
+
+        if path.startswith("/api/application/") and path.endswith("/open"):
+            aid = int(path.split("/")[3])
+            app = db.get_application(aid)
+            if not app:
+                return self._error("not found", 404)
+            which = "cover_letter_file" if body.get("which") == "cover_letter" \
+                else "resume_file"
+            stored = os.path.expanduser((app.get(which) or "").strip())
+            if not stored:
+                return self._error("No file recorded for that yet.", 404)
+            if not os.path.exists(stored):
+                # Almost always iCloud: the path is right, the file has been
+                # evicted, or it has moved since it was noted down.
+                return self._error("That file isn't where the application says "
+                                   "it is:\n%s" % stored, 404)
+            if not macos.open_path(stored):
+                return self._error("macOS would not open that file.", 502)
+            return self._json({"ok": True, "opened": stored})
+
+        if path.startswith("/api/application/"):
+            aid = int(path.split("/")[3])
+            return self._json({"ok": True,
+                               "application": db.update_application(aid, body),
+                               **_snapshots()})
+
+        # -- firm knowledge ----------------------------------------------
+        if path == "/api/knowledge":
+            kid = db.add_knowledge(
+                body.get("firm"), body.get("category"), body.get("body"),
+                source_type=body.get("source_type") or "chat",
+                source_person_id=body.get("source_person_id"),
+                source_label=body.get("source_label") or "",
+                source_url=body.get("source_url") or "")
+            if kid is None:
+                return self._error("That exact note is already on file for this firm.")
+            return self._json({"ok": True, "id": kid, **_snapshots()})
+
+        if path.startswith("/api/knowledge/"):
+            db.update_knowledge(int(path.split("/")[3]), body)
+            return self._json({"ok": True, **_snapshots()})
+
+        # -- resume walk --------------------------------------------------
+        if path == "/api/resume-walk":
+            walk = db.set_resume_walk(body.get("body") or "",
+                                      body.get("source") or "you")
+            return self._json({"ok": True, "resume_walk": walk, **_snapshots()})
+
+        if path == "/api/resume-walk/feedback":
+            db.add_resume_feedback(body.get("body") or "", body.get("source") or "")
+            return self._json({"ok": True, "resume_walk": db.resume_walk(),
+                               **_snapshots()})
+
+        # -- proposals ----------------------------------------------------
+        if path == "/api/proposal/decide":
+            return self._json(decide_proposals(
+                [int(body.get("id"))], body.get("status") or "rejected",
+                body.get("payload")))
+
+        if path == "/api/proposal/decide-batch":
+            ids = [p["id"] for p in db.list_proposals("pending")
+                   if p["batch_id"] == body.get("batch_id")]
+            if not ids:
+                return self._error("Nothing left pending in that batch.")
+            return self._json(decide_proposals(ids, body.get("status") or "accepted"))
 
         if path == "/api/settings":
             return self._json({"ok": True, "settings": db.save_settings(body)})

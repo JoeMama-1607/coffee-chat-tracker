@@ -21,9 +21,59 @@ A file looks like:
   "sent_emails": [{"kind": "outreach", "subject": "", "body": "...", "sent_at": "2026-09-22"}]
 }
 Only the keys present are written, so a file can update one part.
+
+A top-level "type" picks what the file is. No "type" means a person research
+file, exactly as above — that is the original shape and it still works.
+
+    {"type": "application", "match_id": 12, "company": "Bain",
+     "role": "Summer Associate", "office": "Atlanta", "status": "applied",
+     "deadline": "2026-10-15", "job_url": "...", "jd_text": "...",
+     "applied_at": "2026-10-02", "resume_file": "...", "cover_letter_file": "...",
+     "notes": "..."}
+
+Matched on "match_id", else on company + role together; created when neither
+finds one. Only the keys present are written.
+
+    {"type": "firm_knowledge", "firm": "BCG", "entries": [
+       {"category": "culture", "body": "...", "source_type": "research",
+        "source_label": "BCG careers page", "source_url": "..."}]}
+
+Applied straight away — research was authorised to write it. The firm has to
+be one of the six in db.TARGET_FIRMS; categories are db.KNOWLEDGE_CATEGORIES.
+An entry whose body is already on file for that firm is skipped, so a file can
+be re-imported.
+
+    {"type": "proposals", "batch_id": "2026-09-27-josh-giesler",
+     "source_label": "Chat with Josh Giesler, 2026-09-27",
+     "person": {"name": "Josh Giesler", "match_linkedin": "..."},
+     "transcript": "...optional, stored with the batch and shown in Review...",
+     "items": [
+       {"kind": "firm_knowledge",
+        "payload": {"firm": "Bain", "category": "recruiting_process", "body": "..."},
+        "rationale": "..."},
+       {"kind": "resume_walk", "payload": {"new_text": "...full new script..."},
+        "rationale": "..."},
+       {"kind": "resume_walk", "payload": {"add_feedback": "..."}, "rationale": "..."},
+       {"kind": "person_update",
+        "payload": {"status": "chat_done", "chat_at": "2026-09-27", "takeaway": "..."},
+        "rationale": "..."},
+       {"kind": "application_update",
+        "payload": {"match_id": 12, "status": "applied"}, "rationale": "..."}]}
+
+Nothing from a transcript touches the tracker on import. Every item lands as a
+pending proposal and is applied only when it is accepted in Review. Items are
+keyed by their position and content inside the batch, so re-importing the same
+batch_id adds nothing and never resurrects something already decided.
+
+Four snapshots are written after every import and after any change made in the
+app, each atomically through a temp file: research/applications.json,
+research/firms.json, research/resume_walk.json, research/proposals.json —
+plus research/people.json, unchanged. research/last_import.json reports what
+each file did, including its type and any error, so a write can be verified.
 """
 
 import datetime as dt
+import hashlib
 import json
 import os
 
@@ -57,9 +107,7 @@ def _find(people, name, linkedin):
     return hits[0] if len(hits) == 1 else None
 
 
-def _one(path, people, stamp):
-    with open(path, encoding="utf-8") as fh:
-        data = json.load(fh)
+def _person_file(data, people, stamp):
     name = (data.get("name") or "").strip()
     if not name:
         raise ValueError("no name")
@@ -95,7 +143,7 @@ def _one(path, people, stamp):
                              mail.get("sent_at") or stamp)
             have.add(key)
             added += 1
-    result = {"file": os.path.basename(path), "person_id": pid, "name": name,
+    result = {"type": "person", "person_id": pid, "name": name,
               "created": created, "sent_emails_added": added}
     # "offered_slots": [{"start": iso, "end": iso}, ...] — windows Claude picked
     # from research/calendar.json. Saved on the person exactly as if picked in
@@ -122,6 +170,127 @@ def _one(path, people, stamp):
     return result
 
 
+# --------------------------------------------------------- typed inbox files
+
+APPLICATION_KEYS = {"company", "role", "office", "job_url", "jd_text", "status",
+                    "deadline", "applied_at", "interview_r1_at",
+                    "interview_r2_at", "resume_file", "cover_letter_file",
+                    "notes", "archived"}
+
+
+def _application_file(data, people, stamp):
+    """{"type": "application", ...} — create or partially update one role."""
+    company = (data.get("company") or "").strip()
+    existing = db.find_application(data.get("match_id"), company,
+                                   data.get("role") or "")
+    patch = {k: v for k, v in data.items() if k in APPLICATION_KEYS}
+    statuses = {k for k, _ in db.APPLICATION_STATUSES}
+    if patch.get("status") and patch["status"] not in statuses:
+        raise ValueError("unknown status %r — one of %s"
+                         % (patch["status"], ", ".join(sorted(statuses))))
+    if existing is None:
+        if not company:
+            raise ValueError("company is required to create an application")
+        aid = db.create_application(patch)
+        return {"type": "application", "application_id": aid, "created": True,
+                "company": company, "role": patch.get("role", "")}
+    aid = existing["id"]
+    db.update_application(aid, patch)
+    return {"type": "application", "application_id": aid, "created": False,
+            "company": existing["company"], "role": existing["role"],
+            "updated": sorted(patch)}
+
+
+def _firm_knowledge_file(data, people, stamp):
+    """{"type": "firm_knowledge", ...} — applied directly, duplicates skipped."""
+    firm = db.match_target_firm(data.get("firm"))
+    if not firm:
+        raise ValueError("%r is not one of the six target firms (%s)"
+                         % (data.get("firm"), ", ".join(db.TARGET_FIRMS)))
+    categories = {k for k, _ in db.KNOWLEDGE_CATEGORIES}
+    added, skipped = 0, 0
+    for entry in data.get("entries") or []:
+        body = (entry.get("body") or "").strip()
+        if not body:
+            continue
+        category = entry.get("category") or "other"
+        if category not in categories:
+            raise ValueError("unknown category %r — one of %s"
+                             % (category, ", ".join(sorted(categories))))
+        person = _find(people, entry.get("source_person") or "",
+                       entry.get("source_linkedin"))
+        kid = db.add_knowledge(
+            firm, category, body,
+            source_type=entry.get("source_type") or "research",
+            source_person_id=person["id"] if person else None,
+            source_label=entry.get("source_label") or "",
+            source_url=entry.get("source_url") or "")
+        if kid:
+            added += 1
+        else:
+            skipped += 1
+    return {"type": "firm_knowledge", "firm": firm, "added": added,
+            "skipped_duplicates": skipped}
+
+
+def _item_key(index, item):
+    """A stable name for one item inside a batch. Position alone would let an
+    edited file overwrite a decision; the payload alone would let a genuine
+    repeat of the same point vanish. Both together behave."""
+    blob = json.dumps([item.get("kind"), item.get("payload")], sort_keys=True)
+    return "%02d-%s" % (index, hashlib.sha1(blob.encode("utf-8")).hexdigest()[:10])
+
+
+def _proposals_file(data, people, stamp):
+    """{"type": "proposals", ...} — lands as pending, applied only on accept."""
+    batch_id = (data.get("batch_id") or "").strip()
+    if not batch_id:
+        raise ValueError("batch_id is required")
+    label = data.get("source_label") or batch_id
+    who = data.get("person") or {}
+    person = _find(people, who.get("name") or "", who.get("match_linkedin"))
+    pid = person["id"] if person else None
+    db.add_proposal_batch(batch_id, label, pid, data.get("transcript") or "")
+    added, already = 0, 0
+    for index, item in enumerate(data.get("items") or []):
+        kind = item.get("kind")
+        if kind not in db.PROPOSAL_KINDS:
+            raise ValueError("unknown proposal kind %r — one of %s"
+                             % (kind, ", ".join(db.PROPOSAL_KINDS)))
+        made = db.add_proposal(batch_id, _item_key(index, item), kind,
+                               item.get("payload") or {},
+                               item.get("rationale") or "", label, pid)
+        if made:
+            added += 1
+        else:
+            already += 1
+    return {"type": "proposals", "batch_id": batch_id, "pending_added": added,
+            "already_present": already, "person_id": pid,
+            "person_matched": bool(person),
+            "person_wanted": who.get("name") or ""}
+
+
+HANDLERS = {
+    "person": _person_file,
+    "application": _application_file,
+    "firm_knowledge": _firm_knowledge_file,
+    "proposals": _proposals_file,
+}
+
+
+def _one(path, people, stamp):
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+    kind = (data.get("type") or "person").strip()
+    handler = HANDLERS.get(kind)
+    if handler is None:
+        raise ValueError("unknown type %r — one of %s"
+                         % (kind, ", ".join(sorted(HANDLERS))))
+    result = handler(data, people, stamp)
+    result["file"] = os.path.basename(path)
+    return result
+
+
 def import_inbox():
     """Import every JSON in the inbox. Returns a report; quiet when empty."""
     if not os.path.isdir(INBOX):
@@ -145,8 +314,80 @@ def import_inbox():
         report.append(entry)
     with open(os.path.join(ROOT, "last_import.json"), "w", encoding="utf-8") as fh:
         json.dump({"at": stamp, "results": report}, fh, indent=2)
-    write_snapshot()
+    write_snapshots()
     return report
+
+
+def _write(name, payload):
+    """Atomically, so a snapshot is never read half-written."""
+    tmp = os.path.join(ROOT, name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=2, default=str)
+    os.replace(tmp, os.path.join(ROOT, name))
+
+
+def _now():
+    return dt.datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def write_snapshots():
+    """Every snapshot Claude reads, rewritten from the database as it stands.
+
+    Called after an import and after anything changed in the app, so what the
+    agent sees is never a version behind what the user is looking at."""
+    if not os.path.isdir(ROOT):
+        return
+    write_snapshot()
+    _write("applications.json", {"at": _now(),
+                                "statuses": [k for k, _ in db.APPLICATION_STATUSES],
+                                "applications": db.list_applications()})
+    _write("firms.json", {"at": _now(), "firms": firms_payload()})
+    _write("resume_walk.json", resume_walk_payload())
+    _write("proposals.json", {"at": _now(),
+                              "kinds": db.PROPOSAL_KINDS,
+                              "proposals": db.list_proposals()})
+
+
+def firms_payload():
+    """Per target firm: who you know there, what you know, what you applied to."""
+    people = db.list_people(include_archived=False)
+    applications = db.list_applications()
+    knowledge = db.list_knowledge()
+    out = []
+    for firm in db.TARGET_FIRMS:
+        theirs = [p for p in people if db.match_target_firm(p.get("firm")) == firm]
+        apps = [a for a in applications if a.get("target_firm") == firm]
+        due = [a["days_to_deadline"] for a in apps
+               if a.get("days_to_deadline") is not None]
+        out.append({
+            "firm": firm,
+            "people": [{"id": p["id"], "name": p["name"], "role": p.get("role"),
+                        "office": p.get("office"), "status": p.get("status"),
+                        "chat_at": p.get("chat_at")} for p in theirs],
+            "people_count": len(theirs),
+            "chatted_count": len([p for p in theirs if p.get("status")
+                                  in ("chat_done", "thankyou_sent")]),
+            "knowledge": [{"id": k["id"], "category": k["category"],
+                           "body": k["body"], "source_type": k["source_type"],
+                           "source_label": k["source_label"],
+                           "source_url": k.get("source_url"),
+                           "source_person": k.get("source_person_name"),
+                           "created_at": k["created_at"]}
+                          for k in knowledge if k["firm"] == firm],
+            "applications": apps,
+            "next_deadline_days": min(due) if due else None,
+        })
+    return out
+
+
+def resume_walk_payload():
+    walk = db.resume_walk()
+    return {"at": _now(), "body": walk["body"], "updated_at": walk["updated_at"],
+            "source": walk["source"], "version_count": len(walk["versions"]),
+            "feedback": walk["feedback"],
+            "versions": [{"id": v["id"], "source": v["source"],
+                          "created_at": v["created_at"], "chars": len(v["body"])}
+                         for v in walk["versions"]]}
 
 
 def write_snapshot():
