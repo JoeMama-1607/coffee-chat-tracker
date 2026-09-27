@@ -10,7 +10,7 @@ let STATE = {
 let CURRENT = null;        // person open in the drawer
 
 const STATUS_TONE = {
-  uninitiated: '', outreach_sent: 'warn', awaiting_reply: 'warn',
+  tracking: '', uninitiated: '', outreach_sent: 'warn', awaiting_reply: 'warn',
   scheduled: 'gold', chat_done: 'ok', thankyou_sent: 'ok',
   no_response: 'bad',
 };
@@ -375,7 +375,7 @@ function renderPipelineTree() {
   // A firm's tree is for people you're actually tracking with something to
   // show — no LinkedIn on file yet, you haven't reached out at all, or you've
   // given up on them, and there's nothing here worth a branch.
-  const HIDDEN_TREE_STATUS = new Set(['uninitiated', 'no_response']);
+  const HIDDEN_TREE_STATUS = new Set(['tracking', 'uninitiated', 'no_response']);
   const eligible = STATE.people.filter(p =>
     !HIDDEN_TREE_STATUS.has(p.status) && (p.linkedin_raw || '').trim());
 
@@ -697,7 +697,7 @@ function closeModal() { $('#modal').classList.remove('open'); }
 function sentMail(person, kind) {
   const saved = (person.sent_mail || []).some(m => m.kind === kind);
   if (saved) return true;
-  if (kind === 'outreach') return !!person.first_contact_at || (person.status && person.status !== 'uninitiated');
+  if (kind === 'outreach') return !!person.first_contact_at || (person.status && !['uninitiated', 'tracking'].includes(person.status));
   if (kind === 'followup') return (parseInt(person.followups_sent, 10) || 0) > 0;
   if (kind === 'thankyou') return !!person.thankyou_sent_at;
   return false;
@@ -1318,7 +1318,7 @@ async function openSuggestSlots(personId, opts = {}) {
 
   let data;
   try {
-    data = await api('/api/slots', 'POST', {});
+    data = await api('/api/slots', 'POST', { person_id: personId });
   } catch (e) {
     closeModal();
     return toast(e.message, true);
@@ -1332,9 +1332,9 @@ async function openSuggestSlots(personId, opts = {}) {
   }
 
   if (!data.days.length) {
-    $('#m-body').innerHTML = `<div class="card empty">No conflict-free windows in the
-      next two weeks — the calendar looks fully booked between 9am and 6pm on
-      weekdays. Free up some time and try again.</div>`;
+    $('#m-body').innerHTML = `<div class="card empty">Every 2-hour block on the next
+      three weekdays is already saved for someone else. Try "Request 3 more days"
+      or clear an older offer.</div>`;
     return;
   }
 
@@ -1374,9 +1374,8 @@ function paintSuggestSlots(person, data, picked) {
   /* The list is redrawn whenever more days arrive, so it lives in its own
      container — the change listener below is bound once, to the panel. */
   const renderList = () => {
-    $('#slot-intro').innerHTML = `Conflict-free windows from your calendar,
-      ${data.event_count} event${data.event_count === 1 ? '' : 's'} considered.
-      Tick whichever work best to offer ${esc(person.name.split(' ')[0])}.`;
+    $('#slot-intro').innerHTML = `Open 2-hour blocks (9–11, 11–1, 1–3, 3–5) on the next weekdays —
+      blocks already saved for someone else are left out. Tick whichever work best to offer ${esc(person.name.split(' ')[0])}.`;
     $('#slot-list').innerHTML = data.days.map((day, di) => `
       <div class="slot-day">
         <div class="slot-day-label">${esc(day.label)}</div>
@@ -1416,7 +1415,7 @@ function paintSuggestSlots(person, data, picked) {
     btn.textContent = 'Reading further ahead…';
     try {
       const last = data.days[data.days.length - 1];
-      const res = await api('/api/slots', 'POST', { after: last && last.date });
+      const res = await api('/api/slots', 'POST', { after: last && last.date, person_id: person.id });
       if (!res.days.length) {
         note.textContent = 'Nothing further ahead fits — the calendar looks '
           + 'fully booked for those days too.';

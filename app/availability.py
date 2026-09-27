@@ -256,102 +256,48 @@ def busy_intervals(events, tz, rules):
     return _merge(raw)
 
 
-def find_windows(events, rules, now=None, after=None):
-    """Return offerable windows grouped by day.
+# Fixed two-hour blocks between 9am and 5pm. These are the only times ever
+# suggested; the list is not shaped by the calendar at all.
+FIXED_BLOCKS = ((9, 11), (11, 13), (13, 15), (15, 17))
 
-    `after` is a date already offered: the search picks up the day following
-    it, which is how asking for more slots continues past what you have seen
-    rather than handing back the same three days.
 
-    rules keys: timezone, tz_label, work_days, work_start, work_end,
-    min_window_minutes, buffer_minutes, lead_days, horizon_days,
-    slots_wanted, max_per_day, ignore_all_day, ignore_tentative,
-    excluded_calendars.
+def _overlaps(a_start, a_end, b_start, b_end):
+    return a_start < b_end and b_start < a_end
+
+
+def find_windows(taken, rules, now=None, after=None, days_wanted=3):
+    """Every free fixed block for the next `days_wanted` weekdays.
+
+    `taken` is a list of (start, end) windows already saved for other people;
+    a block overlapping one of those is the only thing ever filtered out.
+    `after` is the last date already shown: "Request 3 more days" continues
+    from the weekday following it. Without it, the search starts tomorrow.
     """
     tz = get_tz(rules.get("timezone", "America/New_York"))
     now = now.astimezone(tz) if now else dt.datetime.now(tz)
+    taken = [(s.astimezone(tz), e.astimezone(tz)) for s, e in (taken or [])]
 
-    work_days = {int(d) for d in str(rules.get("work_days", "1,2,3,4,5")).split(",")
-                 if d.strip().isdigit()}
-    sh, sm = parse_hhmm(str(rules.get("work_start", "09:00")), (9, 0))
-    eh, em = parse_hhmm(str(rules.get("work_end", "18:00")), (18, 0))
-    min_window = dt.timedelta(minutes=int(rules.get("min_window_minutes", 60)))
-    lead_days = int(rules.get("lead_days", 2))
-    horizon = int(rules.get("horizon_days", 14))
-    wanted_days = int(rules.get("slots_wanted", 3))
-    max_per_day = int(rules.get("max_per_day", 2))
-    max_window = dt.timedelta(minutes=int(rules.get("max_window_minutes", 180)))
-
-    busy = busy_intervals(events, tz, rules)
-    earliest = now + dt.timedelta(days=lead_days)
-    spread = dict.fromkeys(BUCKETS, 0)
-
+    day = (after or now.date()) + dt.timedelta(days=1)
     days = []
-    cursor = now.date()
-    for offset in range(horizon + 1):
-        day = cursor + dt.timedelta(days=offset)
-        if after and day <= after:
-            continue
-        if (day.weekday() + 1) not in work_days:
-            continue
-
-        day_start = dt.datetime(day.year, day.month, day.day, sh, sm, tzinfo=tz)
-        day_end = dt.datetime(day.year, day.month, day.day, eh, em, tzinfo=tz)
-        if day_start < earliest:
-            day_start = earliest.replace(second=0, microsecond=0)
-            # round up to the next half hour so slots read cleanly
-            spare = day_start.minute % 30
-            if spare:
-                day_start += dt.timedelta(minutes=30 - spare)
-        if day_end - day_start < min_window:
-            continue
-
-        free = [(day_start, day_end)]
-        for b_start, b_end in busy:
-            if b_end <= day_start or b_start >= day_end:
-                continue
-            carved = []
-            for f_start, f_end in free:
-                if b_end <= f_start or b_start >= f_end:
-                    carved.append((f_start, f_end))
+    while len(days) < days_wanted:
+        if day.weekday() < 5:
+            windows = []
+            for sh, eh in FIXED_BLOCKS:
+                s = dt.datetime(day.year, day.month, day.day, sh, tzinfo=tz)
+                e = dt.datetime(day.year, day.month, day.day, eh, tzinfo=tz)
+                if any(_overlaps(s, e, ts, te) for ts, te in taken):
                     continue
-                if b_start > f_start:
-                    carved.append((f_start, min(b_start, f_end)))
-                if b_end < f_end:
-                    carved.append((max(b_end, f_start), f_end))
-            free = carved
-
-        # Every free gap, cut into offerable pieces and tidied to quarter
-        # hours, so the choice below is made over the windows as they would
-        # actually be offered.
-        candidates = []
-        for gap_index, (f_start, f_end) in enumerate(free):
-            for piece_start, piece_end in split_window(f_start, f_end, min_window, max_window):
-                tidied = tidy_window(piece_start, piece_end, min_window, max_window)
-                if tidied:
-                    # Carry which stretch of free time this came out of, so two
-                    # slices of one afternoon are never offered as two choices.
-                    candidates.append((tidied[0], tidied[1], gap_index))
-        if not candidates:
-            continue
-
-        windows = pick_spread(candidates, max_per_day, spread)
-        if not windows:
-            continue
-
-        days.append({
-            "date": day.isoformat(),
-            "label": fmt_day(day),
-            "windows": [{
-                "start": s.isoformat(),
-                "end": e.isoformat(),
-                "text": "%s – %s" % (fmt_time(s), fmt_time(e)),
-                "minutes": int((e - s).total_seconds() // 60),
-            } for s, e in windows],
-        })
-        if len(days) >= wanted_days:
-            break
-
+                windows.append({
+                    "start": s.isoformat(),
+                    "end": e.isoformat(),
+                    "text": "%s – %s" % (fmt_time(s), fmt_time(e)),
+                    "minutes": 120,
+                })
+            # A weekday counts toward the three even if every block is taken,
+            # so "next 3 weekdays" always means exactly that.
+            days.append({"date": day.isoformat(), "label": fmt_day(day),
+                         "windows": windows})
+        day += dt.timedelta(days=1)
     return days
 
 

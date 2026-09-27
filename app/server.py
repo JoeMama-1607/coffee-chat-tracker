@@ -485,7 +485,7 @@ def outlook_draft_for(pid, kind, subject, body):
     patch = {"last_outbound_at": stamp}
     if kind == "outreach":
         patch.update({"draft_subject": subject, "draft_body": body})
-        if person.get("status") == "uninitiated":
+        if person.get("status") in ("uninitiated", "tracking"):
             patch.update({"status": "outreach_sent", "first_contact_at": stamp})
     else:
         patch.update({"status": "thankyou_sent", "thankyou_sent_at": stamp})
@@ -601,35 +601,36 @@ def chat_buckets(people, settings):
     return buckets
 
 
-def build_slots(settings, refresh_days=None, after=None):
+def _taken_by_others(exclude_id=None):
+    """Windows saved as offered slots for anyone other than `exclude_id`."""
+    taken = []
+    for person in db.list_people():
+        if exclude_id is not None and person.get("id") == exclude_id:
+            continue
+        taken.extend(_offered_windows(person))
+    return taken
+
+
+def build_slots(settings, refresh_days=None, after=None, person_id=None):
+    """One 2-hour block per slot (9-11, 11-1, 1-3, 3-5) for the next three
+    weekdays, minus only blocks already saved for someone else."""
     tz = availability.get_tz(settings.get("timezone", "America/New_York"))
     now = dt.datetime.now(tz)
-    horizon = int(refresh_days or settings.get("horizon_days", 14))
-
-    # Asking for more slots means looking past what has already been offered,
-    # so the calendar read has to reach that far too.
     cutoff = None
     if after:
         parsed = availability.parse_iso(str(after))
         if parsed:
             cutoff = parsed.date()
-    start_of_read = now
-    if cutoff:
-        from_day = dt.datetime(cutoff.year, cutoff.month, cutoff.day, tzinfo=tz)
-        start_of_read = max(now, from_day)
-
-    end = start_of_read + dt.timedelta(days=horizon + 1)
-    payload = macos.read_calendar(now, end)
-    days = availability.find_windows(payload.get("events", []), settings,
+    try:
+        pid = int(person_id) if person_id is not None else None
+    except (TypeError, ValueError):
+        pid = None
+    days = availability.find_windows(_taken_by_others(pid), settings,
                                      now=now, after=cutoff)
+    days = [d for d in days if d["windows"]]
     lines = availability.format_slot_lines(days, settings.get("tz_label", "ET"))
-    return {
-        "days": days,
-        "lines": lines,
-        "event_count": len(payload.get("events", [])),
-        "demo": payload.get("demo", False),
-        "note": payload.get("note", ""),
-    }
+    return {"days": days, "lines": lines, "event_count": 0,
+            "demo": False, "note": ""}
 
 
 def sync_outlook(settings):
@@ -653,7 +654,7 @@ def sync_outlook(settings):
         last_in = iso_date(p.get("last_inbound_at"))
         last_out = iso_date(p.get("last_outbound_at"))
         status = p.get("status")
-        if status == "uninitiated" and last_out:
+        if status in ("uninitiated", "tracking") and last_out:
             db.update_person(p["id"], {"status": "outreach_sent",
                                        "first_contact_at": p["last_outbound_at"]})
             advanced.append("%s → outreach sent" % p["name"])
@@ -901,7 +902,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/slots":
             with _lock:
                 return self._json({"ok": True, **build_slots(
-                    settings, body.get("days"), body.get("after"))})
+                    settings, body.get("days"), body.get("after"),
+                    body.get("person_id"))})
 
         if path == "/api/slots.ics":
             # Export exactly what is on screen, so the file and the email agree.
@@ -1347,7 +1349,7 @@ class Handler(BaseHTTPRequestHandler):
             availability.get_tz(settings.get("timezone", "America/New_York"))
         ).isoformat()
         patch = {"last_outbound_at": stamp}
-        if kind == "outreach" and person.get("status") == "uninitiated":
+        if kind == "outreach" and person.get("status") in ("uninitiated", "tracking"):
             patch.update({"status": "outreach_sent", "first_contact_at": stamp})
         elif kind == "followup":
             patch["followups_sent"] = int(person.get("followups_sent") or 0) + 1

@@ -148,6 +148,7 @@ CREATE INDEX IF NOT EXISTS idx_sent_person ON sent_mail(person_id);
 
 # Pipeline stages, in the order the GCA deck describes the process.
 STATUSES = [
+    ("tracking", "Tracking"),          # to research and reach out to
     ("uninitiated", "Uninitiated"),
     ("outreach_sent", "Outreach sent"),
     ("awaiting_reply", "Awaiting reply"),
