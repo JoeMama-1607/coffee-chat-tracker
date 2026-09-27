@@ -90,6 +90,28 @@ and a "Coffee chats" category, so searching either one finds them all.
 
 When a chat is confirmed, replace the hold with the real meeting.
 
+**Applications** is every role you have applied to or mean to, soonest
+deadline first. Overdue deadlines are red, the next week is gold, and each one
+opens a panel with the role, the job description, where you stand, the key
+dates, and buttons that open the tailored resume and cover letter from wherever
+you keep them. Anything inside a week also shows up on Today.
+
+Nothing about a deadline is ever emailed or notified. Today and the
+Applications screen are the only places recruiting is allowed to nag from.
+
+**Firms** covers the six you are actually recruiting for — McKinsey, Bain, BCG,
+EY, PwC and Kearney. Each card opens everyone you know there (live from the
+pipeline, clickable through to the person), everything you have learned about
+the firm grouped by what it is about, and the applications you have in. Every
+piece of knowledge carries where it came from: a chat, with who and when, or
+research, with the page it came off. In an interview that difference matters.
+
+**Review** is where changes wait for you. When you paste a coffee-chat
+transcript to Claude it does not write anything into the tracker; it proposes.
+Each proposal shows what it would change — a line-by-line before and after for
+the resume walk — why, and Accept, Edit-then-accept or Reject. Accepting takes
+exactly the same path as typing it in yourself.
+
 **Prep** holds the call structure and a question bank split into good and great.
 The great ones carry your own context, which is what makes them great.
 
@@ -124,6 +146,78 @@ briefing to your Downloads folder: summary, career timeline, all the questions,
 the thirty-minute schedule, and a page of ruled lines to write on during the
 call. The PDF is composed from the underlying data rather than from the screen,
 so the on-screen Copy buttons never appear in it.
+
+### Your resume walk
+
+**Settings → Resume walk** holds the two minutes you open every interview with,
+the coaching points people have given you on it, and every version it has been
+through. Saving never overwrites: the previous script stays in the history with
+the date and who prompted the change, so you can see how the story moved.
+
+---
+
+## Working with Claude
+
+Claude cannot open the database — it is in `~/Library`, where a separate app has
+no business reaching. The hand-off is files, in the `research/` folder next to
+this README.
+
+**Claude writes into `research/inbox/`.** The app imports everything there the
+next time the page refreshes, moves each file into `research/imported/` with a
+timestamp, and writes `research/last_import.json` saying what each file did,
+including anything that failed and why.
+
+A top-level `"type"` says what a file is. A file with no `type` is person
+research, which is what the folder started out doing:
+
+| `type` | What it does |
+|---|---|
+| *(none)* | Research, prep and drafts for one person |
+| `application` | Creates or updates one role, matched on `match_id` or company + role |
+| `firm_knowledge` | Adds notes to one of the six firm pages, applied straight away |
+| `proposals` | Everything read out of a transcript, waiting for you in Review |
+
+Only the keys present in a file are written, so a file can update one field and
+leave the rest alone. Imports are safe to repeat: a duplicate knowledge entry is
+skipped, and re-importing a proposal batch adds nothing and never resurrects
+something you already decided.
+
+Nothing read out of a transcript is ever applied on import. It lands in Review
+as a pending proposal and waits.
+
+**Claude reads the snapshots**, which the app rewrites after every import and
+after anything you change in the app:
+
+| File | What's in it |
+|---|---|
+| `research/people.json` | Everyone in the tracker |
+| `research/applications.json` | Every application, with days to the deadline |
+| `research/firms.json` | Per firm: people, knowledge, applications |
+| `research/resume_walk.json` | The current script, feedback, version count |
+| `research/proposals.json` | Pending, plus the last 50 decided |
+| `research/calendar.json` | Free time, written when Claude asks for it |
+
+The exact shape of every inbox file is documented at the top of
+`app/research.py`, which is the file that reads them.
+
+### Backfill
+
+`app/scripts/backfill_firms.py` reads everything already in
+`research/imported/` and lifts the firm-level statements out of it onto the
+firm pages. It is deliberately timid — a line has to name the firm, carry a
+firm-level word and not read as somebody's own story — because a firm page full
+of one person's career history is worse than an empty one. Run it as often as
+you like; it never adds the same line twice.
+
+```
+python3 app/scripts/backfill_firms.py --dry-run          # show, write nothing
+python3 app/scripts/backfill_firms.py
+python3 app/scripts/backfill_firms.py --seed-applications
+```
+
+`--seed-applications` is off by default and asks before it writes: it guesses
+one application per PDF in your Recruiting/Applications folder, and a guess is
+not something to do quietly.
 
 ---
 
@@ -223,7 +317,8 @@ CoffeeChatTracker/
     ├── pdfwriter.py           hand-rolled PDF output for prep notes
     ├── ics.py                 calendar holds for offered slots
     ├── macos.py               osascript bridge
-    ├── scripts/               the AppleScript and JXA it calls
+    ├── research.py            the JSON hand-off with Claude
+    ├── scripts/               the AppleScript and JXA it calls, and backfill_firms.py
     └── web/                   the interface
 ```
 
