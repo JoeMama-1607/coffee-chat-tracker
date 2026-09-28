@@ -296,6 +296,29 @@ TARGET_FIRM_ALIASES = {
     "a t kearney": "Kearney",
 }
 
+# A fixed line or two on each firm, so a firm page opens with something on it
+# on day one. Deliberately the uncontroversial shape of the place — what it is
+# and what it is known for — and deliberately not recruiting specifics, which
+# change every cycle and belong in knowledge entries with a source on them.
+FIRM_BRIEFS = {
+    "McKinsey": "The oldest of the big three. Generalist staffing with practice "
+                "affiliations, the widest global footprint of the three, and an "
+                "alumni network people trade on for decades.",
+    "Bain": "The smallest of the big three and the most office-centred — you are "
+            "hired into an office and stay close to it. Known for private equity "
+            "and consumer work, and for selling on results and culture.",
+    "BCG": "The middle of the big three. Strategy work alongside build-and-deploy "
+           "work through BCG X, and an apprenticeship model it talks about often.",
+    "EY": "Big Four. The strategy practice is EY-Parthenon; the wider firm spans "
+          "transactions, transformation and technology, so the work you get "
+          "depends heavily on which part you join.",
+    "PwC": "Big Four. Strategy& is the strategy arm; most MBA hiring sits across "
+           "advisory, deals and transformation, again split by practice.",
+    "Kearney": "Independent and global, smaller than the big three, with a long "
+               "operations, supply chain and procurement heritage and a lean "
+               "office model.",
+}
+
 # What a piece of firm knowledge is about. `other` is the honest home for
 # anything that doesn't fit rather than a category invented on the spot.
 KNOWLEDGE_CATEGORIES = [

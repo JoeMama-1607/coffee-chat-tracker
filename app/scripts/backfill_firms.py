@@ -131,7 +131,10 @@ def backfill(dry_run=False):
                                     or (person or {}).get("firm"))
         if not firm:
             continue
-        label = "%s — %s" % (name or "research", os.path.basename(path))
+        # The person is attributed separately, so the label is just where it
+        # was read from — repeating the name next to itself reads as a bug.
+        label = os.path.basename(path) if person else (
+            "%s — %s" % (name or "research", os.path.basename(path)))
         for key in ("research_md", "prep_md"):
             for category, body in candidates(data.get(key), firm):
                 seen += 1

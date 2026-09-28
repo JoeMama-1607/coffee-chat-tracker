@@ -361,6 +361,7 @@ def firms_payload():
                if a.get("days_to_deadline") is not None]
         out.append({
             "firm": firm,
+            "brief": db.FIRM_BRIEFS.get(firm, ""),
             "people": [{"id": p["id"], "name": p["name"], "role": p.get("role"),
                         "office": p.get("office"), "status": p.get("status"),
                         "chat_at": p.get("chat_at")} for p in theirs],

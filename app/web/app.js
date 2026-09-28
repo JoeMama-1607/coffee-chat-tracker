@@ -2041,19 +2041,37 @@ function openFirm(firm, quiet = false) {
   openPanel(firm,
     `${data.chatted_count} spoken with · ${data.people_count} in the pipeline ·
      ${data.knowledge.length} note${data.knowledge.length === 1 ? '' : 's'}`, `
-    <h2 style="margin-top:0">People</h2>
-    ${data.people.length ? data.people.map(p => `
-      <div class="action clickable" data-open="${p.id}">
-        <div class="grow"><span class="who">${esc(p.name)}</span>
-          <span class="muted small">${p.role ? ' · ' + esc(p.role) : ''}${p.office ? ' · ' + esc(p.office) : ''}</span>
-          <div class="detail">${esc(statusLabel(p.status))}${p.chat_at ? ' · chat ' + chatTimeLabel(p.chat_at) : ''}</div>
-        </div>
-        <button class="btn sm" data-open="${p.id}">Open</button>
-      </div>`).join('')
-      : '<div class="small faint">Nobody at this firm in the tracker yet.</div>'}
+    <div class="card" style="margin-bottom:18px;padding:12px 14px">
+      <div class="small" style="line-height:1.55">${esc(data.brief || '')}</div>
+      <div class="small faint" style="margin-top:7px">A fixed description of the
+        firm, not something you were told — what people actually said is below,
+        with their name on it.</div>
+    </div>
 
-    <h2>Knowledge</h2>
-    <div class="card" style="margin-bottom:16px;padding:12px 14px">
+    <h2 style="margin-top:0">Knowledge</h2>
+    <p class="small muted" style="margin-top:-6px">${data.knowledge.length
+      ? `${data.knowledge.length} note${data.knowledge.length === 1 ? '' : 's'} on file
+         — ${data.knowledge.filter(k => k.source_type === 'chat').length} from chats,
+         ${data.knowledge.filter(k => k.source_type === 'research').length} from research.
+         ${(() => {
+           const missing = (STATE.knowledge_categories || [])
+             .filter(c => c.key !== 'other' && !data.knowledge.some(k => k.category === c.key))
+             .map(c => c.label.toLowerCase());
+           return missing.length ? `Nothing yet on ${missing.join(', ')}.` : 'Every category covered.';
+         })()}`
+      : 'Nothing on file yet. Add what you learn as you learn it.'}</p>
+    ${Object.keys(byCategory).map(cat => `
+      <h4 style="margin:14px 0 8px">${esc(knowledgeCategoryLabel(cat))}</h4>
+      ${byCategory[cat].map(k => `
+        <div class="know ${k.source_type === 'research' ? 'research' : ''}">${esc(k.body)}<div class="meta">${[
+          k.source_type === 'research' ? 'research' : 'chat',
+          k.source_person ? esc(k.source_person) : '',
+          k.source_label ? esc(k.source_label) : '',
+          k.source_url ? `<a href="${esc(k.source_url)}" target="_blank" rel="noreferrer">source</a>` : '',
+          dateLabel(k.created_at),
+        ].filter(Boolean).join(' · ')} <a href="#" data-delknow="${k.id}" style="margin-left:8px;color:var(--danger)">remove</a></div></div>`).join('')}`).join('')}
+
+    <div class="card" style="margin:14px 0 16px;padding:12px 14px">
       <div class="row" style="margin-bottom:8px">
         <select id="k-category" style="max-width:180px">${(STATE.knowledge_categories || []).map(c =>
           `<option value="${c.key}">${esc(c.label)}</option>`).join('')}</select>
@@ -2069,17 +2087,17 @@ function openFirm(firm, quiet = false) {
         <button class="btn sm" id="k-add" data-firm-add="${esc(firm)}">Add</button>
       </div>
     </div>
-    ${Object.keys(byCategory).length ? Object.keys(byCategory).map(cat => `
-      <h4 style="margin:14px 0 8px">${esc(knowledgeCategoryLabel(cat))}</h4>
-      ${byCategory[cat].map(k => `
-        <div class="know ${k.source_type === 'research' ? 'research' : ''}">${esc(k.body)}<div class="meta">${[
-          k.source_type === 'research' ? 'research' : 'chat',
-          k.source_person ? esc(k.source_person) : '',
-          k.source_label ? esc(k.source_label) : '',
-          k.source_url ? `<a href="${esc(k.source_url)}" target="_blank" rel="noreferrer">source</a>` : '',
-          dateLabel(k.created_at),
-        ].filter(Boolean).join(' · ')} <a href="#" data-delknow="${k.id}" style="margin-left:8px;color:var(--danger)">remove</a></div></div>`).join('')}`).join('')
-      : '<div class="small faint">Nothing on file yet. Add what you learn as you learn it.</div>'}
+
+    <h2>People</h2>
+    ${data.people.length ? data.people.map(p => `
+      <div class="action clickable" data-open="${p.id}">
+        <div class="grow"><span class="who">${esc(p.name)}</span>
+          <span class="muted small">${p.role ? ' · ' + esc(p.role) : ''}${p.office ? ' · ' + esc(p.office) : ''}</span>
+          <div class="detail">${esc(statusLabel(p.status))}${p.chat_at ? ' · chat ' + chatTimeLabel(p.chat_at) : ''}</div>
+        </div>
+        <button class="btn sm" data-open="${p.id}">Open</button>
+      </div>`).join('')
+      : '<div class="small faint">Nobody at this firm in the tracker yet.</div>'}
 
     <h2>Applications</h2>
     ${data.applications.length ? data.applications.map(a => `

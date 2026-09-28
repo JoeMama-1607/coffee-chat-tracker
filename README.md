@@ -100,9 +100,10 @@ Nothing about a deadline is ever emailed or notified. Today and the
 Applications screen are the only places recruiting is allowed to nag from.
 
 **Firms** covers the six you are actually recruiting for — McKinsey, Bain, BCG,
-EY, PwC and Kearney. Each card opens everyone you know there (live from the
-pipeline, clickable through to the person), everything you have learned about
-the firm grouped by what it is about, and the applications you have in. Every
+EY, PwC and Kearney. Each card opens with a fixed line or two on what the firm
+is, then everything you have learned about it grouped by what it is about, then
+everyone you know there (live from the pipeline, clickable through to the
+person), then the applications you have in. Every
 piece of knowledge carries where it came from: a chat, with who and when, or
 research, with the page it came off. In an interview that difference matters.
 
