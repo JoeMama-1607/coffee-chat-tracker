@@ -252,7 +252,6 @@ STATUSES = [
     ("uninitiated", "Uninitiated"),
     ("tracking", "Tracking"),          # to research and reach out to
     ("outreach_sent", "Outreach sent"),
-    ("awaiting_reply", "Awaiting reply"),
     ("scheduled", "Chat scheduled"),
     ("chat_done", "Chat done"),
     ("thankyou_sent", "Thank-you sent"),
@@ -301,22 +300,41 @@ TARGET_FIRM_ALIASES = {
 # and what it is known for — and deliberately not recruiting specifics, which
 # change every cycle and belong in knowledge entries with a source on them.
 FIRM_BRIEFS = {
-    "McKinsey": "The oldest of the big three. Generalist staffing with practice "
-                "affiliations, the widest global footprint of the three, and an "
-                "alumni network people trade on for decades.",
-    "Bain": "The smallest of the big three and the most office-centred — you are "
-            "hired into an office and stay close to it. Known for private equity "
-            "and consumer work, and for selling on results and culture.",
-    "BCG": "The middle of the big three. Strategy work alongside build-and-deploy "
-           "work through BCG X, and an apprenticeship model it talks about often.",
-    "EY": "Big Four. The strategy practice is EY-Parthenon; the wider firm spans "
-          "transactions, transformation and technology, so the work you get "
-          "depends heavily on which part you join.",
-    "PwC": "Big Four. Strategy& is the strategy arm; most MBA hiring sits across "
-           "advisory, deals and transformation, again split by practice.",
-    "Kearney": "Independent and global, smaller than the big three, with a long "
-               "operations, supply chain and procurement heritage and a lean "
-               "office model.",
+    "McKinsey": "Founded 1926 by James O. McKinsey; employee-owned, ~38,000 people and "
+                "~$16B revenue (2023 est.). The largest and oldest of MBB: generalist "
+                "staffing with deep practice/industry knowledge, strict up-or-out, and the "
+                "strongest CEO and alumni network in the industry. Tops prestige rankings but "
+                "has sat out Vault's Consulting 50 for three years; carries reputational "
+                "baggage (e.g. the $600M+ opioid settlements). CaseCoach #1.",
+    "BCG": "Founded 1963 by Bruce Henderson; inventor of the growth-share matrix. $14.4B "
+           "revenue in 2025 (+7%, 22nd straight year of growth), 33,500 people, 100+ cities. "
+           "Now close to McKinsey in size and growing faster, with the heaviest push into "
+           "AI and tech delivery through BCG X (AI work grew ~25% in 2025). Known for "
+           "creative, bespoke problem-solving. Vault 2026 #2; CaseCoach #2.",
+    "Bain": "Founded 1973 in Boston by Bill Bain and ex-BCG partners (separate from Bain "
+            "Capital). ~19,000 people in 67 cities, the smallest of MBB. Differentiators: "
+            "results focus and implementation, the leading private equity / due diligence "
+            "practice, Net Promoter Score, and an office-centred, famously supportive "
+            "culture. Vault 2026 #1 and Glassdoor #1 Best Place to Work a record seven "
+            "times. CaseCoach #3.",
+    "Kearney": "Shares its 1926 Chicago origin with McKinsey; independent and partner-owned "
+               "again since a 2006 buyback from EDS. $2B+ revenue, 5,300+ people, 60+ "
+               "offices in 40+ countries. Best known for operations, procurement and supply "
+               "chain, plus strategy work; runs the Global Business Policy Council think tank "
+               "(FDI Confidence Index). Smaller classes, collegial and entrepreneurial feel. "
+               "CaseCoach #4.",
+    "EY": "EY-Parthenon is EY's strategy brand: Parthenon (a Boston boutique founded 1991, "
+          "strong in private equity, M&A and education) was bought in 2014. In 2025 EY "
+          "folded its whole Strategy & Transactions line into it, making ~25,000 people in "
+          "150 countries covering strategy, deals, value creation and turnaround. Pitch: "
+          "MBB-style strategy backed by Big Four scale and execution; the work you get "
+          "depends heavily on the team you join. CaseCoach #9.",
+    "PwC": "Strategy& is PwC's strategy arm: the former Booz & Company (roots in Edwin "
+           "Booz's 1914 firm), acquired in 2014 and the largest strategy firm bought by a "
+           "Big Four. ~4,500 consultants, 80+ offices in 41 countries; known for "
+           "capabilities-driven strategy and Fit for Growth cost transformation. Most MBA "
+           "hiring sits across PwC advisory, deals and transformation (PwC Advisory $24.3B "
+           "in FY2025), split by practice. CaseCoach #8.",
 }
 
 # What a piece of firm knowledge is about. `other` is the honest home for
@@ -352,6 +370,8 @@ def match_target_firm(name):
 
 DEFAULT_SETTINGS = {
     "user_name": "",
+    # Put in the chat invite (location + body) and the confirmation email.
+    "zoom_link": "",
     "user_email": "",
     "user_program": "Class of 2028 | Master of Business Administration (M.B.A.)",
     "user_school": "Goizueta Business School | Emory University",
@@ -379,6 +399,10 @@ DEFAULT_SETTINGS = {
     "ignore_tentative": "1",
     "excluded_calendars": "",
     "hold_prefix": "Coffee chat hold",
+    # Apple Calendar calendars (by name) for holds and confirmed chats. Empty
+    # = your default calendar; a name that doesn't exist falls back to it.
+    "hold_calendar": "",
+    "chat_calendar": "",
     # follow-up policy, straight from the deck
     "followup_after_days": "7",
     "max_followups": "3",
@@ -504,7 +528,7 @@ PERSON_FIELDS = [
     "linkedin_raw", "profile_updated_at", "offered_slots", "offered_slots_at",
     "profile_pdf", "archived",
     "research_md", "research_sources", "prep_md", "draft_subject", "draft_body",
-    "researched_at",
+    "researched_at", "invite_drafted_at", "confirm_drafted_at",
 ]
 
 # Columns added after the first release. Existing databases are upgraded in
@@ -523,6 +547,9 @@ MIGRATIONS = [
     ("person", "draft_subject", "TEXT DEFAULT ''"),
     ("person", "draft_body", "TEXT DEFAULT ''"),
     ("person", "researched_at", "TEXT"),
+    # After a slot is confirmed: the Outlook invite and the confirmation reply.
+    ("person", "invite_drafted_at", "TEXT"),
+    ("person", "confirm_drafted_at", "TEXT"),
 ]
 
 
@@ -567,6 +594,9 @@ def migrate(conn):
     # "Nurturing" is gone as a stage — it always meant "thank-you already
     # sent, ongoing", which thankyou_sent already covers.
     conn.execute("UPDATE person SET status='thankyou_sent' WHERE status='nurturing'")
+
+    # "Awaiting reply" is gone too — it was "Outreach sent" by another name.
+    conn.execute("UPDATE person SET status='outreach_sent' WHERE status='awaiting_reply'")
 
 
 def list_people(include_archived=False):

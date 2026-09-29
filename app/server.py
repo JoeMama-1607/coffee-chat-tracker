@@ -73,7 +73,8 @@ def _sync_holds(person, settings, old_windows, new_windows):
         return macos.calendar_sync(
             delete=[(title, s, e) for s, e in gone],
             ensure=[{"prefix": title, "title": title, "start": s, "end": e,
-                     "notes": notes} for s, e in new_windows])
+                     "notes": notes, "calendar": settings.get("hold_calendar", "")}
+                    for s, e in new_windows])
     except macos.BridgeError as exc:
         return {"ok": False, "deleted": 0, "created": 0, "error": str(exc)}
 
@@ -175,6 +176,7 @@ def _sync_chat(person, settings, deletes, new_window, old_start):
         return macos.calendar_sync(delete=deletes, upsert={
             "prefix": title, "title": title + (" (%s)" % person["firm"] if person.get("firm") else ""),
             "start": new_window[0], "end": new_window[1], "notes": notes,
+            "calendar": settings.get("chat_calendar", ""),
             "match": (old_start, None) if old_start else None,
         })
     except macos.BridgeError as exc:
@@ -273,7 +275,7 @@ def compute_actions(people, settings, resolved=None):
             })
 
         # 2. Silence after outreach
-        elif status in ("outreach_sent", "awaiting_reply") and last_out:
+        elif status == "outreach_sent" and last_out:
             quiet = days_between(now, last_out)
             replied_since = last_in and last_in > last_out
             if not replied_since and quiet is not None and quiet >= followup_after:
@@ -334,7 +336,7 @@ def firm_coverage(people, settings):
             b["chatted"] += 1
         elif status == "scheduled":
             b["scheduled"] += 1
-        elif status in ("outreach_sent", "awaiting_reply"):
+        elif status == "outreach_sent":
             b["pending"] += 1
     for t in targets:
         buckets.setdefault(t, {"firm": t, "total": 0, "chatted": 0,
@@ -539,6 +541,97 @@ def _maybe_export_calendar():
     t.start()
 
 
+# ------------------------------------------------ after a slot is confirmed
+
+CHAT_MINUTES = 30
+
+
+def _my_first_name(settings):
+    return (settings.get("user_name") or "").split()[0] if (settings.get("user_name") or "").strip() else "Aashish"
+
+
+def invite_text(person, settings):
+    first = templates.first_name(person.get("name"))
+    zoom = (settings.get("zoom_link") or "").strip()
+    body = ("Hi %s,\n\nSharing the invite based on the slot you suggested. I have "
+            "attached my resume here for your reference. Looking forward to connecting!"
+            % first)
+    if zoom:
+        body += "\n\nJoin Zoom Meeting:\n%s" % zoom
+    title = "%s x %s - Coffee Chat" % (first, _my_first_name(settings))
+    return title, body
+
+
+def confirmation_text(person, settings):
+    first = templates.first_name(person.get("name"))
+    zoom = (settings.get("zoom_link") or "").strip()
+    body = ("Hi %s,\n\nThank you for the confirmation. I have shared the invite "
+            "accordingly. I hope you are fine with a zoom meeting, let me know "
+            "otherwise. Looking forward to connecting!" % first)
+    if zoom:
+        body += "\n\nZoom link: %s" % zoom
+    return body
+
+
+def _chat_moment(person, settings):
+    tz = availability.get_tz(settings.get("timezone", "America/New_York"))
+    raw = person.get("chat_at")
+    if not raw:
+        return None
+    moment = availability.parse_iso(raw) if "T" in raw else None
+    if moment is None:
+        return None
+    return moment if moment.tzinfo else moment.replace(tzinfo=tz)
+
+
+def draft_chat_invite(pid):
+    settings = db.get_settings()
+    person = db.get_person(pid)
+    if not person:
+        return {"ok": False, "error": "person not found"}
+    if not (person.get("email") or "").strip():
+        return {"ok": False, "error": "Add %s's email first." % person["name"]}
+    start = _chat_moment(person, settings)
+    if not start or person.get("status") != "scheduled":
+        return {"ok": False, "error": "Confirm a slot first — there's no chat time yet."}
+    title, body = invite_text(person, settings)
+    attachment = resume_attachment(settings)
+    try:
+        res = macos.draft_invite(person["email"], person["name"], title, body, start,
+                                 CHAT_MINUTES, (settings.get("zoom_link") or "").strip(),
+                                 attachment)
+    except macos.BridgeError as exc:
+        return {"ok": False, "error": str(exc)}
+    stamp = dt.datetime.now(start.tzinfo).isoformat()
+    db.update_person(pid, {"invite_drafted_at": stamp})
+    db.add_sent_mail(pid, "invite", title, body, stamp)
+    return {"ok": True, "attached": res.get("attached", False) and bool(attachment),
+            "has_resume": bool(attachment), "zoom": bool(settings.get("zoom_link")),
+            "demo": bool(res.get("demo"))}
+
+
+def draft_chat_confirmation(pid):
+    settings = db.get_settings()
+    person = db.get_person(pid)
+    if not person:
+        return {"ok": False, "error": "person not found"}
+    if not (person.get("email") or "").strip():
+        return {"ok": False, "error": "Add %s's email first." % person["name"]}
+    if not person.get("chat_at") or person.get("status") != "scheduled":
+        return {"ok": False, "error": "Confirm a slot first — there's no chat time yet."}
+    body = confirmation_text(person, settings)
+    subject = "Re: " + templates._subject(settings)
+    try:
+        res = macos.draft_reply(person["email"], person["name"], subject, body)
+    except macos.BridgeError as exc:
+        return {"ok": False, "error": str(exc)}
+    stamp = dt.datetime.now(
+        availability.get_tz(settings.get("timezone", "America/New_York"))).isoformat()
+    db.update_person(pid, {"confirm_drafted_at": stamp, "last_outbound_at": stamp})
+    db.add_sent_mail(pid, "confirmation", subject, body, stamp)
+    return {"ok": True, "threaded": res.get("threaded", False), "demo": bool(res.get("demo"))}
+
+
 research.HOOKS["save_slots"] = save_offered_slots
 research.HOOKS["make_draft"] = outlook_draft_for
 research.HOOKS["slot_lines"] = lambda p: stored_slot_lines(p)
@@ -661,9 +754,6 @@ def sync_outlook(settings):
             db.update_person(p["id"], {"status": "outreach_sent",
                                        "first_contact_at": p["last_outbound_at"]})
             advanced.append("%s → outreach sent" % p["name"])
-        elif status == "outreach_sent" and last_in and last_out and last_in > last_out:
-            db.update_person(p["id"], {"status": "awaiting_reply"})
-            advanced.append("%s → replied to you" % p["name"])
     return {
         "scanned": len(messages),
         "matched": matched,
@@ -1245,6 +1335,12 @@ class Handler(BaseHTTPRequestHandler):
                 "holds": len(offered),
             })
 
+        if path == "/api/chat/invite":
+            return self._json(draft_chat_invite(int(body.get("person_id") or 0)))
+
+        if path == "/api/chat/confirmation":
+            return self._json(draft_chat_confirmation(int(body.get("person_id") or 0)))
+
         if path == "/api/chat/reschedule":
             person = db.get_person(int(body.get("person_id") or 0))
             if not person:
@@ -1277,7 +1373,7 @@ class Handler(BaseHTTPRequestHandler):
                     calendar = {"ok": False, "deleted": 0, "error": str(exc)}
             patch = {"chat_at": None}
             if person.get("status") == "scheduled":
-                patch["status"] = "awaiting_reply"
+                patch["status"] = "outreach_sent"
             return self._json({"ok": True, "calendar": calendar,
                                "person": db.update_person(person["id"], patch)})
 

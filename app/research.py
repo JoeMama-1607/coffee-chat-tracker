@@ -291,6 +291,10 @@ def _one(path, people, stamp):
     return result
 
 
+# Settings a research file may set (research/inbox/settings.json, no "name").
+SETTING_KEYS = {"zoom_link", "hold_calendar", "chat_calendar"}
+
+
 def import_inbox():
     """Import every JSON in the inbox. Returns a report; quiet when empty."""
     if not os.path.isdir(INBOX):
@@ -305,6 +309,14 @@ def import_inbox():
     for name in files:
         path = os.path.join(INBOX, name)
         try:
+            with open(path, encoding="utf-8") as fh:
+                peek = json.load(fh)
+            if "settings" in peek and not peek.get("name"):
+                patch = {k: v for k, v in peek["settings"].items() if k in SETTING_KEYS}
+                db.save_settings(patch)
+                os.replace(path, os.path.join(DONE, stamp[:19].replace(":", "") + " " + name))
+                report.append({"file": name, "settings": sorted(patch)})
+                continue
             entry = _one(path, people, stamp)
             os.replace(path, os.path.join(
                 DONE, stamp[:19].replace(":", "") + " " + name))

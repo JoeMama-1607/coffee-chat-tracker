@@ -166,13 +166,15 @@ def calendar_sync(delete=None, upsert=None, ensure=None):
     request = {"delete": [{"prefix": p, "start": _iso(s), "end": _iso(e) if e else None}
                           for p, s, e in delete],
                "ensure": [{"prefix": x["prefix"], "title": x["title"], "start": _iso(x["start"]),
-                           "end": _iso(x["end"]), "notes": x.get("notes", "")} for x in ensure]}
+                           "end": _iso(x["end"]), "notes": x.get("notes", ""),
+                           "calendar": x.get("calendar", "")} for x in ensure]}
     if upsert:
         match = upsert.get("match")
         request["upsert"] = {
             "prefix": upsert["prefix"], "title": upsert["title"],
             "start": _iso(upsert["start"]), "end": _iso(upsert["end"]),
             "notes": upsert.get("notes", ""),
+            "calendar": upsert.get("calendar", ""),
             "match": ({"start": _iso(match[0]), "end": _iso(match[1]) if match[1] else None}
                       if match else None),
         }
@@ -312,3 +314,32 @@ def draft_email(to_address, to_name, subject, body, attachment=""):
     raise BridgeError(
         "Could not create the draft in Outlook. " + " | ".join(errors)
     )
+
+
+def draft_invite(to_address, to_name, subject, body, start, minutes, location="",
+                 attachment=""):
+    """Open an Outlook meeting invite with them as a required attendee. Never
+    sends. `start` is an aware datetime."""
+    if DEMO:
+        return {"ok": True, "demo": True, "attached": bool(attachment)}
+    now = dt.datetime.now(start.tzinfo)
+    offset = int(round((start - now).total_seconds()))
+    attach_arg = os.path.expanduser(attachment) if attachment and \
+        os.path.isfile(os.path.expanduser(attachment)) else ""
+    out = _run(["osascript", _script("outlook_invite.applescript"), to_address,
+                to_name, subject, _html_body(body), str(offset), str(int(minutes)),
+                location or "", attach_arg], DETECT_TIMEOUT)
+    return {"ok": True, "attached": out.strip().endswith(" attached")}
+
+
+def draft_reply(from_address, to_name, subject, body, days_back=60):
+    """Reply in their thread (latest message from them); a new email to them
+    if none is found. Never sends."""
+    if DEMO:
+        return {"ok": True, "demo": True, "threaded": False}
+    out = _run(["osascript", _script("outlook_reply.applescript"), from_address,
+                _html_body(body), str(int(days_back))], CALENDAR_TIMEOUT)
+    if out.strip() == "ok":
+        return {"ok": True, "threaded": True}
+    res = draft_email(from_address, to_name, subject, body, "")
+    return dict(res, threaded=False)

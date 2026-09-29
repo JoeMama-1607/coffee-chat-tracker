@@ -27,6 +27,17 @@
   --ok-bg: #e7f5ee;
   --info-bg: #eaf0fb;
 
+  /* Pipeline status colours: grey = not started, blue = waiting on them,
+     gold = coming up, violet = chat done (thank-you owed), green = complete,
+     red = closed. Text colour first, chip background second. */
+  --st-tracking: #8b97ac;  --st-tracking-bg: #f1f3f7;
+  --st-uninit: #5c6b85;    --st-uninit-bg: #eceff4;
+  --st-out: #1f6fc5;       --st-out-bg: #e6f0fb;
+  --st-sched: #a36f00;     --st-sched-bg: #fdf1cf;  --st-sched-dot: #f2a900;
+  --st-done: #6a4bc4;      --st-done-bg: #efebfb;
+  --st-ty: #1c7a4f;        --st-ty-bg: #e7f5ee;
+  --st-nr: #b3261e;        --st-nr-bg: #fbeaea;
+
   --radius: 10px;
   --radius-sm: 6px;
   --shadow: 0 1px 2px rgba(16, 32, 64, .06), 0 8px 24px rgba(16, 32, 64, .08);
@@ -52,6 +63,13 @@
     --ok: #6fd6a2;
     --ok-bg: #123020;
     --info-bg: #1a2540;
+    --st-tracking: #8391a8;  --st-tracking-bg: #1a2233;
+    --st-uninit: #a7b3c8;    --st-uninit-bg: #222c40;
+    --st-out: #7fb4f0;       --st-out-bg: #16273f;
+    --st-sched: #f5c451;     --st-sched-bg: #362a0d;  --st-sched-dot: #f2a900;
+    --st-done: #b7a4f5;      --st-done-bg: #2a2248;
+    --st-ty: #6fd6a2;        --st-ty-bg: #123020;
+    --st-nr: #ff8a80;        --st-nr-bg: #3a1b1b;
     --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 8px 24px rgba(0, 0, 0, .35);
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, .35);
   }
@@ -198,6 +216,14 @@ h3 { font-size: 15px; margin: 0 0 8px; font-weight: 620; }
 .chip.warn { background: var(--warn-bg); color: var(--warn); }
 .chip.bad { background: var(--danger-bg); color: var(--danger); }
 .chip.gold { background: rgba(242,169,0,.18); color: var(--gold-600); }
+.chip.st-tracking { background: var(--st-tracking-bg); color: var(--st-tracking);
+  border: 1px dashed var(--st-tracking); padding: 1px 8px; }
+.chip.st-uninit { background: var(--st-uninit-bg); color: var(--st-uninit); }
+.chip.st-out { background: var(--st-out-bg); color: var(--st-out); }
+.chip.st-sched { background: var(--st-sched-bg); color: var(--st-sched); }
+.chip.st-done { background: var(--st-done-bg); color: var(--st-done); }
+.chip.st-ty { background: var(--st-ty-bg); color: var(--st-ty); }
+.chip.st-nr { background: var(--st-nr-bg); color: var(--st-nr); }
 
 /* buttons */
 .btn {

@@ -13,7 +13,9 @@
 // "ensure" creates each event unless one with that prefix and those exact
 // times is already there (used for coffee-chat holds).
 // "end": null matches on start time alone. An upsert that finds nothing to
-// move creates the event in the default calendar.
+// move creates the event. Upsert and ensure items may name a "calendar" (by
+// title); the event is created in / moved to it, or the default calendar is
+// used with a warning in "errors" when no writable calendar has that name.
 
 ObjC.import('EventKit');
 ObjC.import('Foundation');
@@ -73,6 +75,10 @@ function run(argv) {
       var ev = events.objectAtIndex(i);
       if (up && up.match && !moved && hit(ev, { prefix: up.prefix, start: up.match.start, end: up.match.end })) {
         ev.title = $(up.title);
+        if (up.calendar) {
+          var target = pickCal(up.calendar);
+          if (target && !(target.isNil && target.isNil())) ev.calendar = target;
+        }
         ev.startDate = nsdate(ms(up.start));
         ev.endDate = nsdate(ms(up.end));
         if (up.notes) ev.notes = $(up.notes);
@@ -94,8 +100,28 @@ function run(argv) {
       }
     }
 
+    var calCache = {};
+    function pickCal(name) {
+      if (name && calCache[name] !== undefined) return calCache[name];
+      var found = null;
+      if (name) {
+        var cals = store.calendarsForEntityType($.EKEntityTypeEvent);
+        var want = String(name).toLowerCase();
+        for (var c = 0; c < cals.count; c++) {
+          var cc = cals.objectAtIndex(c);
+          if ((ObjC.unwrap(cc.title) || '').toLowerCase() === want && cc.allowsContentModifications) {
+            found = cc; break;
+          }
+        }
+        if (!found) errors.push('calendar "' + name + '" not found or read-only; used the default calendar');
+      }
+      if (!found) found = store.defaultCalendarForNewEvents;
+      if (name) calCache[name] = found;
+      return found;
+    }
+
     function make(spec) {
-      var cal = store.defaultCalendarForNewEvents;
+      var cal = pickCal(spec.calendar);
       if (!cal || (cal.isNil && cal.isNil())) { errors.push('no default calendar'); return false; }
       var ne = $.EKEvent.eventWithEventStore(store);
       ne.calendar = cal;
@@ -113,7 +139,7 @@ function run(argv) {
     }
 
     if (up && !moved) {
-      var cal = store.defaultCalendarForNewEvents;
+      var cal = pickCal(up.calendar);
       if (!cal || cal.isNil && cal.isNil()) {
         errors.push('no default calendar');
       } else {

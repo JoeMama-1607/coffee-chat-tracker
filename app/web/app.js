@@ -14,9 +14,9 @@ let CURRENT = null;        // person open in the drawer
 let PANEL = null;          // { kind: 'application' | 'firm', id } behind it
 
 const STATUS_TONE = {
-  tracking: '', uninitiated: '', outreach_sent: 'warn', awaiting_reply: 'warn',
-  scheduled: 'gold', chat_done: 'ok', thankyou_sent: 'ok',
-  no_response: 'bad',
+  tracking: 'st-tracking', uninitiated: 'st-uninit', outreach_sent: 'st-out',
+  scheduled: 'st-sched', chat_done: 'st-done', thankyou_sent: 'st-ty',
+  no_response: 'st-nr',
 };
 
 /* ------------------------------------------------------------- plumbing */
@@ -220,7 +220,7 @@ function renderToday() {
     { value: people.filter(p => p.status !== 'uninitiated').length, label: 'People tracked' },
     { value: chatted, label: 'Chats completed' },
     { value: count('scheduled'), label: 'Scheduled' },
-    { value: count('outreach_sent') + count('awaiting_reply'), label: 'Awaiting reply' },
+    { value: count('outreach_sent'), label: 'Awaiting reply' },
     { value: overdue, label: 'Overdue actions', alert: overdue > 0 },
   ].map(s => `<div class="stat${s.alert ? ' alert' : ''}">
       <div class="value">${s.value}</div><div class="label">${s.label}</div></div>`).join('');
@@ -396,10 +396,10 @@ let TREE_MINIMIZED = false;
 const TREE_COLLAPSED_FIRMS = new Set();
 const PRIORITY_FIRMS = ['mckinsey', 'bain', 'bcg', 'pwc', 'ey', 'kearney'];
 const STATUS_DOT = {
-  tracking: 'var(--text-faint)',
-  outreach_sent: 'var(--warn)', awaiting_reply: 'var(--warn)',
-  scheduled: 'var(--gold-500)',
-  chat_done: 'var(--ok)', thankyou_sent: 'var(--ok)',
+  tracking: 'var(--st-tracking)', uninitiated: 'var(--st-uninit)',
+  outreach_sent: 'var(--st-out)', scheduled: 'var(--st-sched-dot)',
+  chat_done: 'var(--st-done)', thankyou_sent: 'var(--st-ty)',
+  no_response: 'var(--st-nr)',
 };
 
 function renderPipelineTree() {
@@ -528,7 +528,7 @@ async function openPerson(id, quiet = false) {
   // record whichever one they actually said yes to — typed in, not ticked,
   // since the real answer rarely matches a suggested window exactly.
   const showConfirmBox = savedWindows.length > 0
-    && ['outreach_sent', 'awaiting_reply'].includes(person.status);
+    && person.status === 'outreach_sent';
   const confirmBox = showConfirmBox ? `
     <div class="card" style="margin-bottom:16px;padding:12px 14px">
       <div style="font-size:13px;font-weight:650;margin-bottom:8px">
@@ -555,6 +555,14 @@ async function openPerson(id, quiet = false) {
           <button class="btn ghost sm" id="d-chat-cancel">Cancel chat</button>
         </span>
       </div>
+      ${person.status === 'scheduled' ? `<div class="row" style="gap:8px;margin-top:10px">
+        <button class="btn ${person.invite_drafted_at ? 'primary' : 'gold'} sm" id="d-invite">
+          ${person.invite_drafted_at ? 'Invite drafted ✓ — again' : 'Draft invite'}</button>
+        <button class="btn ${person.confirm_drafted_at ? 'primary' : 'gold'} sm" id="d-confirm-mail">
+          ${person.confirm_drafted_at ? 'Confirmation drafted ✓ — again' : 'Draft confirmation email'}</button>
+        <span class="small faint" style="flex:1;min-width:180px">Opens in Outlook for you to send.
+          Invite: ${esc((person.name || '').trim().split(' ')[0])} x ${esc(((STATE.settings.user_name || 'Aashish').trim().split(' ')[0]))} - Coffee Chat, 30 min, resume attached${STATE.settings.zoom_link ? ', Zoom link' : ' (no Zoom link set in Settings)'}.</span>
+      </div>` : ''}
       <div id="d-chat-editor" style="display:none;margin-top:10px">
         <div class="row" style="gap:8px">
           ${chatTimeFields('d-resched', chatDate, chatHHMM)}
@@ -756,21 +764,8 @@ async function openSentMail(personId, kind) {
         <pre class="sent-body">${esc(m.body)}</pre>
       </div>`).join('')
     : `<div class="empty small">No copy was kept — this went out before the app started saving sent emails.</div>`;
-  const mine = kind === 'outreach' && (person.draft_body || '').trim() ? `
-    <h2>Claude's researched draft</h2>
-    <p class="small muted" style="margin:-4px 0 10px">Written from the research on the prep
-      sheet, in your voice. Time windows are filled in when you draft it.</p>
-    <div class="card" style="padding:12px 14px;border-left:3px solid var(--gold-500)">
-      <div class="row" style="margin-bottom:6px">
-        <strong style="flex:1">${esc(person.draft_subject || '(no subject)')}</strong>
-        <button class="btn ghost sm" data-copy-text="${esc(person.draft_body)}">Copy</button>
-      </div>
-      <pre class="sent-body">${esc(person.draft_body)}</pre>
-    </div>` : '';
   openModal(labels[kind] + ' — ' + person.name, `
-    ${mine ? '<h2 style="margin-top:0">What you sent</h2>' : ''}
     ${list}
-    ${mine}
     ${kind === 'followup' ? `<div class="row"><button class="btn gold" id="m-another">Draft another nudge</button></div>` : ''}`);
   const again = $('#m-another');
   if (again) again.onclick = () => openDraft(personId, 'followup');
@@ -2315,7 +2310,7 @@ function fillResumeWalk() {
 function fillSettings() {
   const s = STATE.settings;
   const set = (id, key) => { const el = $(id); if (el) el.value = s[key] != null ? s[key] : ''; };
-  ['user_name', 'user_email', 'user_pitch', 'timezone',
+  ['user_name', 'user_email', 'user_pitch', 'zoom_link', 'hold_calendar', 'chat_calendar', 'timezone',
    'target_firms', 'followup_after_days', 'max_followups', 'thankyou_within_hours']
     .forEach(k => set('#s-' + k, k));
 
@@ -2396,7 +2391,7 @@ async function confirmSlot(personId, start, end, button) {
       ? `; ${cal.deleted} hold${cal.deleted === 1 ? '' : 's'} removed`
       : `; ${cal.deleted || 0} of ${res.holds} holds removed (delete the rest by hand)`;
     if (cal.error) msg += ` (Calendar: ${cal.error})`;
-    toast(msg, !!cal.error);
+    toast(msg + ' — next: Draft invite / Draft confirmation email in their panel', !!cal.error);
     await refresh();
     if (CURRENT && CURRENT.id === personId) await openPerson(personId, true);
   } catch (e) {
@@ -2669,6 +2664,30 @@ document.addEventListener('click', async (ev) => {
     } catch (e) { return toast(e.message, true); }
   }
 
+  if (id === 'd-invite' || id === 'd-confirm-mail') {
+    if (!CURRENT) return;
+    const btn = ev.target;
+    btn.disabled = true;
+    const invite = id === 'd-invite';
+    try {
+      const res = await api(invite ? '/api/chat/invite' : '/api/chat/confirmation', 'POST',
+                            { person_id: CURRENT.id });
+      if (!res.ok) { toast(res.error || 'Could not create the draft', true); return; }
+      let msg;
+      if (res.demo) msg = 'Demo mode — nothing opened in Outlook';
+      else if (invite) msg = res.attached ? 'Invite open in Outlook with your resume — press Send'
+        : res.has_resume ? 'Invite open in Outlook — the resume could not be attached, add it by hand'
+        : 'Invite open in Outlook — no resume uploaded in Settings';
+      else msg = res.threaded ? 'Reply open in Outlook, in their thread — press Send'
+        : 'No email from them found — opened a new email instead';
+      toast(msg, invite && !res.attached && !res.demo);
+      await refresh();
+      return openPerson(CURRENT.id, true);
+    } catch (e) { toast(e.message, true); }
+    finally { btn.disabled = false; }
+    return;
+  }
+
   if (id === 'd-chat-cancel') {
     if (!CURRENT) return;
     if (!confirmInline(ev.target, 'Sure? Cancel chat')) return;
@@ -2739,6 +2758,23 @@ document.addEventListener('click', async (ev) => {
     try {
       await api('/api/settings', 'POST', patch);
       toast('Saved');
+      return refresh();
+    } catch (e) { return toast(e.message, true); }
+  }
+
+  if (id === 'btn-save-cals') {
+    try {
+      await api('/api/settings', 'POST', { hold_calendar: $('#s-hold_calendar').value.trim(),
+                                          chat_calendar: $('#s-chat_calendar').value.trim() });
+      toast('Calendars saved — new holds and chats go there');
+      return refresh();
+    } catch (e) { return toast(e.message, true); }
+  }
+
+  if (id === 'btn-save-zoom') {
+    try {
+      await api('/api/settings', 'POST', { zoom_link: $('#s-zoom_link').value.trim() });
+      toast('Zoom link saved');
       return refresh();
     } catch (e) { return toast(e.message, true); }
   }
