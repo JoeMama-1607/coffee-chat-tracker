@@ -48,6 +48,7 @@ function run(argv) {
     var probes = dels.slice();
     if (up && up.match) probes.push(up.match);
     ensure.forEach(function (e) { probes.push(e); });
+    var calCache = {};   // before the move loop, which already calls pickCal
     var events = null;
     if (probes.length) {
       var lo = Infinity, hi = -Infinity;
@@ -100,7 +101,6 @@ function run(argv) {
       }
     }
 
-    var calCache = {};
     function pickCal(name) {
       if (name && calCache[name] !== undefined) return calCache[name];
       var found = null;
