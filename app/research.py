@@ -17,6 +17,8 @@ A file looks like:
   "prep_md": "...",                       # prep sheet, markdown
   "draft_subject": "...",
   "draft_body": "... {{HORIZON}} ... {{SLOTS}} ...",
+  "thankyou_subject": "...",   # thank-you note, kept apart from the outreach draft
+  "thankyou_body": "...",
   "require_existing": true,              # refuse to create a new person
   "sent_emails": [{"kind": "outreach", "subject": "", "body": "...", "sent_at": "2026-09-22"}]
 }
@@ -125,7 +127,8 @@ def _person_file(data, people, stamp):
         if patch:
             db.update_person(pid, patch)
     extra = {}
-    for key in ("research_md", "prep_md", "draft_subject", "draft_body"):
+    for key in ("research_md", "prep_md", "draft_subject", "draft_body",
+                "thankyou_subject", "thankyou_body"):
         if key in data:
             extra[key] = data[key] or ""
     if "sources" in data:
@@ -292,7 +295,7 @@ def _one(path, people, stamp):
 
 
 # Settings a research file may set (research/inbox/settings.json, no "name").
-SETTING_KEYS = {"zoom_link", "hold_calendar", "chat_calendar"}
+SETTING_KEYS = {"zoom_link", "zoom_meeting_id", "zoom_passcode", "hold_calendar", "chat_calendar"}
 
 
 def import_inbox():

@@ -372,6 +372,8 @@ DEFAULT_SETTINGS = {
     "user_name": "",
     # Put in the chat invite (location + body) and the confirmation email.
     "zoom_link": "",
+    "zoom_meeting_id": "",
+    "zoom_passcode": "",
     "user_email": "",
     "user_program": "Class of 2028 | Master of Business Administration (M.B.A.)",
     "user_school": "Goizueta Business School | Emory University",
@@ -527,7 +529,7 @@ PERSON_FIELDS = [
     "thankyou_sent_at", "followups_sent", "next_action", "next_action_date",
     "linkedin_raw", "profile_updated_at", "offered_slots", "offered_slots_at",
     "profile_pdf", "archived",
-    "research_md", "research_sources", "prep_md", "draft_subject", "draft_body",
+    "research_md", "research_sources", "prep_md", "draft_subject", "draft_body", "thankyou_subject", "thankyou_body", "sent_flags",
     "researched_at", "invite_drafted_at", "confirm_drafted_at",
 ]
 
@@ -546,6 +548,9 @@ MIGRATIONS = [
     ("person", "prep_md", "TEXT DEFAULT ''"),
     ("person", "draft_subject", "TEXT DEFAULT ''"),
     ("person", "draft_body", "TEXT DEFAULT ''"),
+    ("person", "thankyou_subject", "TEXT DEFAULT ''"),
+    ("person", "thankyou_body", "TEXT DEFAULT ''"),
+    ("person", "sent_flags", "TEXT DEFAULT ''"),
     ("person", "researched_at", "TEXT"),
     # After a slot is confirmed: the Outlook invite and the confirmation reply.
     ("person", "invite_drafted_at", "TEXT"),

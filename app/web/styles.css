@@ -34,7 +34,7 @@
   --st-uninit: #5c6b85;    --st-uninit-bg: #eceff4;
   --st-out: #1f6fc5;       --st-out-bg: #e6f0fb;
   --st-sched: #a36f00;     --st-sched-bg: #fdf1cf;  --st-sched-dot: #f2a900;
-  --st-done: #6a4bc4;      --st-done-bg: #efebfb;
+  --st-done: #3f1f8f;      --st-done-bg: #d9cdf6;
   --st-ty: #1c7a4f;        --st-ty-bg: #e7f5ee;
   --st-nr: #b3261e;        --st-nr-bg: #fbeaea;
 
@@ -67,7 +67,7 @@
     --st-uninit: #a7b3c8;    --st-uninit-bg: #222c40;
     --st-out: #7fb4f0;       --st-out-bg: #16273f;
     --st-sched: #f5c451;     --st-sched-bg: #362a0d;  --st-sched-dot: #f2a900;
-    --st-done: #b7a4f5;      --st-done-bg: #2a2248;
+    --st-done: #d4c6ff;      --st-done-bg: #3d2a78;
     --st-ty: #6fd6a2;        --st-ty-bg: #123020;
     --st-nr: #ff8a80;        --st-nr-bg: #3a1b1b;
     --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 8px 24px rgba(0, 0, 0, .35);

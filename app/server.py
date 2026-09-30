@@ -267,6 +267,7 @@ def compute_actions(people, settings, resolved=None):
             actions.append({
                 "person_id": p["id"], "name": name, "firm": p.get("firm"), "tier": tier,
                 "kind": "thankyou",
+                "chat_done": status in ("chat_done", "thankyou_sent"),
                 "key": action_key("thankyou", p, p.get("chat_at")),
                 "urgency": "overdue" if hours > thankyou_hours else "today",
                 "label": "Send thank-you note",
@@ -557,7 +558,15 @@ def invite_text(person, settings):
             "attached my resume here for your reference. Looking forward to connecting!"
             % first)
     if zoom:
-        body += "\n\nJoin Zoom Meeting:\n%s" % zoom
+        # Zoom's own invitation block, so the details read the way people expect.
+        body += "\n\nJoin Zoom Meeting\n%s" % zoom
+        mid = (settings.get("zoom_meeting_id") or "").strip()
+        pwd = (settings.get("zoom_passcode") or "").strip()
+        extra = "\n".join(x for x in (
+            "Meeting ID: %s" % mid if mid else "",
+            "Passcode: %s" % pwd if pwd else "") if x)
+        if extra:
+            body += "\n\n" + extra
     title = "%s x %s - Coffee Chat" % (first, _my_first_name(settings))
     return title, body
 
@@ -1648,8 +1657,16 @@ class Handler(BaseHTTPRequestHandler):
             if lines is None:
                 lines = build_slots(settings).get("lines", [])
 
-        if kind == "thankyou":
-            draft = templates.thankyou(person, settings, body.get("highlights", ""))
+        if kind == "thankyou" and person.get("status") not in ("chat_done", "thankyou_sent"):
+            return self._error("mark the chat as done before drafting the thank-you", 400)
+        if kind == "thankyou" and (person.get("thankyou_body") or "").strip():
+            # Claude's thank-you, written from the chat notes.
+            draft = {"subject": person.get("thankyou_subject") or "Thank you",
+                     "body": person["thankyou_body"]}
+        elif kind == "thankyou":
+            # No template: the thank-you is always written by Claude from the
+            # chat notes. Until it is, the box opens empty.
+            draft = {"subject": "Thank you - Aashish Balivada", "body": ""}
         elif kind == "followup":
             draft = templates.followup(person, settings, lines or [])
         elif (person.get("draft_body") or "").strip():
@@ -1695,6 +1712,12 @@ class Handler(BaseHTTPRequestHandler):
             patch["followups_sent"] = int(person.get("followups_sent") or 0) + 1
         elif kind == "thankyou":
             patch.update({"status": "thankyou_sent", "thankyou_sent_at": stamp})
+        try:
+            flags = json.loads(person.get("sent_flags") or "{}") or {}
+        except ValueError:
+            flags = {}
+        flags[kind] = True
+        patch["sent_flags"] = json.dumps(flags)
         db.update_person(person["id"], patch)
         db.add_sent_mail(person["id"], kind, subject, text, stamp)
 
