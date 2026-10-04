@@ -80,6 +80,12 @@ class ImportTest(unittest.TestCase):
         self.assertEqual(db.get_person(pid)["status"], "chat_done")
         self.assertTrue(os.path.exists(os.path.join(research.INBOX, "jane.json")))
 
+    def test_unknown_status_creates_no_one(self):
+        self.drop("new.json", {"name": "New Person",
+                               "person": {"status": "offer"}})
+        self.assertIn("unknown status", self.run_import()["error"])
+        self.assertEqual(db.list_people(include_archived=True), [])
+
     # --------------------------------------------------------- follow-ups
 
     def thankyou_owed(self):

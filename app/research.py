@@ -12,9 +12,7 @@ A file looks like:
   "name": "Jane Doe",                     # required; used to match
   "match_linkedin": "https://...",        # optional, better match than the name
   "person": {"firm": "Bain", "role": "...", "email": "...", ...},  # optional
-                                          # "status" too: one of db.STATUSES;
-                                          # "thankyou_sent" also stamps
-                                          # thankyou_sent_at, like Done does
+                                          # may carry "status" — see below
   "research_md": "...",                   # journey summary, markdown
   "sources": [{"title": "...", "url": "..."}],
   "prep_md": "...",                       # prep sheet, markdown
@@ -63,24 +61,59 @@ be re-imported.
        {"kind": "application_update",
         "payload": {"match_id": 12, "status": "applied"}, "rationale": "..."}]}
 
-    {"type": "followups", "items": [{"key": "thankyou:12:2026-09-27T...", "done": true}]}
-
-Ticks a Today action off ("done": true, the default) or puts it back
-("done": false), by the key in research/actions.json. The label and detail
-stay as the app wrote them — the file only carries the key. A thank-you
-ticked off this way marks the person thank-you sent, exactly as in the app.
-A key that is neither open nor ticked off is reported in "not_found".
-
 Nothing from a transcript touches the tracker on import. Every item lands as a
 pending proposal and is applied only when it is accepted in Review. Items are
 keyed by their position and content inside the batch, so re-importing the same
 batch_id adds nothing and never resurrects something already decided.
 
+Actions taken in Locked In come back as two shapes, applied straight away.
+
+Set a person's status — a person file with only a status:
+
+    {"name": "Jane Doe", "require_existing": true,
+     "person": {"status": "thankyou_sent"}}
+
+  - "status" must be one of the keys in db.STATUSES: uninitiated, tracking,
+    outreach_sent, scheduled, chat_done, thankyou_sent, no_response. Anything
+    else fails the whole file: nothing is written, the file stays in
+    research/inbox/, and research/last_import.json carries the error.
+  - "thankyou_sent" also stamps thankyou_sent_at with the import time, as
+    Done does in the app, which clears that person's "Send thank-you note"
+    from Today. A person who already has thankyou_sent_at keeps the original.
+  - Other statuses leave thankyou_sent_at alone.
+  - Keep "require_existing": true so a misspelt name fails instead of
+    creating a new person. Match on "match_linkedin" when the name is shared.
+
+Tick a follow-up done — a followups file, one item per Today action:
+
+    {"type": "followups", "items": [
+       {"key": "thankyou:12:2026-09-27T14:00:00-04:00", "done": true},
+       {"key": "followup:7:2026-09-20T09:12:00-04:00:0", "done": false}]}
+
+  - "key" is required on every item and is copied verbatim from
+    research/actions.json — the same key the Today list uses. Keys carry the
+    situation behind them (the last email, the chat time), so a newer email
+    or a moved chat mints a new key and the old one comes back "not_found".
+  - "done": true (the default) ticks the action off, exactly like its tick in
+    the app; "done": false puts a ticked-off action back on Today.
+  - Only the key is read. The label and detail stay as the app wrote them;
+    any other keys on an item are ignored.
+  - Ticking a "thankyou" action also sets the person to thankyou_sent with
+    thankyou_sent_at, and putting it back returns them to chat_done — the
+    same as the app. Either shape alone is enough to record a thank-you.
+  - Re-importing the same file changes nothing. The report in
+    research/last_import.json lists keys under "done", "reopened",
+    "unchanged" (already in the asked state) and "not_found". A not_found key
+    does not fail the file, which still moves to research/imported/. An
+    item without a key does fail the file.
+
 Five snapshots are written after every import and after any change made in the
 app, each atomically through a temp file: research/applications.json,
 research/firms.json, research/resume_walk.json, research/proposals.json,
 research/actions.json (the open Today actions, with their keys) —
-plus research/people.json, unchanged. research/last_import.json reports what
+plus research/people.json, unchanged. actions.json lists each open action's
+key, kind, person_id, name, label, detail and urgency; ticked-off actions are
+not in it. research/last_import.json reports what
 each file did, including its type and any error, so a write can be verified.
 """
 
