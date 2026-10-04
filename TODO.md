@@ -65,3 +65,36 @@ for backup in a portable format, or to hand to a career coach. Not urgent as
 of 2026-09-19: no coach ask yet, and copying
 `~/Library/Application Support/CoffeeChatTracker/` already covers backup.
 Revisit if either changes.
+
+## 5. Locked In: only the owner can read contacts and reviews
+
+Locked In's database rule is `read: view` at the root, so anyone the page is
+shared with can read every contact's name, email and research (`persons/*`,
+`snapshot/people`), the chat reviews (`chats/*`), prep (`prep/*`) and firm
+cards. The page is private today, but the Case Log tab has a "Share my case
+history" button that invites sharing. Make every collection owner-read except
+`cases` (and `caseIndex`), so a shared link shows the case history and nothing
+about people. Republish with the `db` rules declared explicitly, then check a
+read at the `view` level comes back empty for `persons`.
+
+## 6. Locked In: flag firms that are under-networked
+
+A strip on Today listing target firms with few or no chats, next to their
+application deadline. As of 2026-10-04 EY has 31 people in the tracker and
+no chat done yet (two scheduled), Kearney none at all. Derived from
+`snapshot/people` and `applications`, no new state. Overlaps with #2 above,
+which is the fuller version in the Mac app.
+
+## 7. Locked In: fill the readiness checklist from what it already knows
+
+In an application, "Coffee chats done" and "Referral named" are manual
+ticks, but the page already counts chats at the firm and stores
+`referralPersonId`. Tick them automatically (show the count), and keep
+"Cases in their style" tied to the graded cases it already lists.
+
+## 8. Index more casebooks for the partner-case search
+
+Only Wharton 2025 (18 cases) is in `caseIndex`, while "Log partner case"
+offers seven books, so most partner cases don't match and get saved as
+"located manually". Index the rest (Darden 2024–25 stays excluded) through
+the case-coach routine.
