@@ -312,13 +312,33 @@ def compute_actions(people, settings, resolved=None):
                 "detail": "Reply received %s" % last_in.strftime("%b %d"),
             })
 
+    # 4. Follow-ups Claude filed after a chat (people to contact, things to
+    #    watch for). Due dates only set the urgency; there's no clock otherwise.
+    for f in db.list_followups():
+        due = iso_date(f.get("due"))
+        days = (due.date() - now.date()).days if due else None
+        actions.append({
+            "person_id": f.get("person_id"),
+            "name": f.get("person_name") or f.get("firm") or "Follow-up",
+            "firm": f.get("firm") if f.get("person_name") else "",  # firm shown as name otherwise
+            "tier": "B", "kind": "todo",
+            "key": "todo:" + f["key"],
+            "urgency": ("overdue" if days is not None and days < 0
+                        else "today" if days is not None and days <= 3 else "low"),
+            "label": f.get("text") or "",
+            "detail": ("due " + due.strftime("%b %d")) if due else "",
+        })
+
     actions = [a for a in actions if a.get("key") not in resolved]
     order = {"overdue": 0, "today": 1, "low": 2}
     tier_order = {"A": 0, "B": 1, "C": 2}
     # Urgency still comes first — an overdue Tier-C beats a today Tier-A — but
     # within the same urgency a target-firm contact shouldn't be buried under
     # everyone you're not actually prioritising.
-    actions.sort(key=lambda a: (order.get(a["urgency"], 3), tier_order.get(a.get("tier"), 1)))
+    # Thank-yous first, then replies and follow-ups, nudges last.
+    kind_order = {"thankyou": 0, "reply": 1, "todo": 2, "followup": 3, "stop": 4}
+    actions.sort(key=lambda a: (kind_order.get(a["kind"], 5), order.get(a["urgency"], 3),
+                                tier_order.get(a.get("tier"), 1)))
     return actions
 
 
@@ -551,6 +571,23 @@ def _my_first_name(settings):
     return (settings.get("user_name") or "").split()[0] if (settings.get("user_name") or "").strip() else "Aashish"
 
 
+def _zoom_block(settings):
+    """Zoom's own invitation block, so the details read the way people expect.
+    Used by both the calendar invite and the confirmation email."""
+    zoom = (settings.get("zoom_link") or "").strip()
+    if not zoom:
+        return ""
+    block = "\n\nJoin Zoom Meeting\n%s" % zoom
+    mid = (settings.get("zoom_meeting_id") or "").strip()
+    pwd = (settings.get("zoom_passcode") or "").strip()
+    extra = "\n".join(x for x in (
+        "Meeting ID: %s" % mid if mid else "",
+        "Passcode: %s" % pwd if pwd else "") if x)
+    if extra:
+        block += "\n\n" + extra
+    return block
+
+
 def invite_text(person, settings):
     first = templates.first_name(person.get("name"))
     zoom = (settings.get("zoom_link") or "").strip()
@@ -558,15 +595,7 @@ def invite_text(person, settings):
             "attached my resume here for your reference. Looking forward to connecting!"
             % first)
     if zoom:
-        # Zoom's own invitation block, so the details read the way people expect.
-        body += "\n\nJoin Zoom Meeting\n%s" % zoom
-        mid = (settings.get("zoom_meeting_id") or "").strip()
-        pwd = (settings.get("zoom_passcode") or "").strip()
-        extra = "\n".join(x for x in (
-            "Meeting ID: %s" % mid if mid else "",
-            "Passcode: %s" % pwd if pwd else "") if x)
-        if extra:
-            body += "\n\n" + extra
+        body += _zoom_block(settings)
     title = "%s x %s - Coffee Chat" % (first, _my_first_name(settings))
     return title, body
 
@@ -578,7 +607,7 @@ def confirmation_text(person, settings):
             "accordingly. I hope you are fine with a zoom meeting, let me know "
             "otherwise. Looking forward to connecting!" % first)
     if zoom:
-        body += "\n\nZoom link: %s" % zoom
+        body += _zoom_block(settings)
     return body
 
 
@@ -1581,6 +1610,15 @@ class Handler(BaseHTTPRequestHandler):
             _outlook_status["checked"] = True
             return self._json({"ok": True, "outlook": _outlook_status})
 
+        if path == "/api/import":
+            with _import_lock:
+                report = research.import_inbox()
+                try:
+                    research.write_snapshots()
+                except OSError:
+                    pass
+            return self._json({"ok": True, "results": report})
+
         if path == "/api/calendar/pull":
             try:
                 return self._json(pull_from_calendar(settings))
@@ -1687,6 +1725,14 @@ class Handler(BaseHTTPRequestHandler):
         # An edited draft from the interface wins over the scaffold.
         subject = body.get("subject") or draft["subject"]
         text = body.get("body") or draft["body"]
+
+        if body.get("save_only") and kind in ("thankyou", "outreach"):
+            # Manual save: keep your edits so the draft reopens exactly as
+            # you left it. Opening a draft never rewrites what is stored.
+            prefix = "thankyou" if kind == "thankyou" else "draft"
+            db.update_person(person["id"], {prefix + "_subject": subject,
+                                            prefix + "_body": body.get("body", "")})
+            return self._json({"ok": True, "saved": True})
 
         if not body.get("open_in_outlook"):
             return self._json({"ok": True, "subject": subject, "body": text,

@@ -67,6 +67,15 @@ pending proposal and is applied only when it is accepted in Review. Items are
 keyed by their position and content inside the batch, so re-importing the same
 batch_id adds nothing and never resurrects something already decided.
 
+    {"type": "followups", "items": [
+       {"key": "pwc-csx-contact", "text": "Talk to someone in CSX",
+        "person": "Tanvi Joshi", "firm": "PwC", "due": "2026-11-12"}]}
+
+Follow-ups Claude files after a chat; they show on Today in yellow. "key" is
+stable: re-importing updates the text, and a ticked-off key stays ticked off.
+"person" and "due" are optional. research/followups.json lists them with a
+"done" flag.
+
 Four snapshots are written after every import and after any change made in the
 app, each atomically through a temp file: research/applications.json,
 research/firms.json, research/resume_walk.json, research/proposals.json —
@@ -273,7 +282,30 @@ def _proposals_file(data, people, stamp):
             "person_wanted": who.get("name") or ""}
 
 
+def _followups_file(data, people, stamp):
+    """{"type": "followups", "items": [{"key": "pwc-csx-contact", "text": "...",
+    "person": "Tanvi Joshi", "firm": "PwC", "due": "2026-11-12"}]}
+    "key" is required and stable: re-importing the same key updates the text,
+    and a key ticked off in the app stays ticked off."""
+    added = 0
+    for item in data.get("items") or []:
+        key = (item.get("key") or "").strip()
+        text = (item.get("text") or "").strip()
+        if not key or not text:
+            raise ValueError("every follow-up needs a key and text")
+        pid = None
+        if item.get("person"):
+            hit = _find(people, item["person"], item.get("match_linkedin"))
+            if hit is None:
+                raise LookupError("no one called %r in the tracker" % item["person"])
+            pid = hit["id"]
+        db.upsert_followup(key, text, pid, item.get("firm", ""), item.get("due", ""))
+        added += 1
+    return {"type": "followups", "upserted": added}
+
+
 HANDLERS = {
+    "followups": _followups_file,
     "person": _person_file,
     "application": _application_file,
     "firm_knowledge": _firm_knowledge_file,
@@ -358,6 +390,9 @@ def write_snapshots():
                                 "applications": db.list_applications()})
     _write("firms.json", {"at": _now(), "firms": firms_payload()})
     _write("resume_walk.json", resume_walk_payload())
+    resolved = db.resolved_keys()
+    _write("followups.json", {"at": _now(), "followups": [
+        dict(f, done=("todo:" + f["key"]) in resolved) for f in db.list_followups()]})
     _write("proposals.json", {"at": _now(),
                               "kinds": db.PROPOSAL_KINDS,
                               "proposals": db.list_proposals()})
@@ -406,6 +441,26 @@ def resume_walk_payload():
                          for v in walk["versions"]]}
 
 
+def _share_profile_pdf(p):
+    """Copy an uploaded LinkedIn PDF to research/profiles/ so Claude can read
+    it (the original lives in ~/Library, out of Claude's reach). Returns the
+    path relative to research/, or "" when there is none."""
+    src = p.get("profile_pdf") or ""
+    if not src or not os.path.isfile(src):
+        return ""
+    slug = "-".join(_norm(p.get("name")).replace("/", " ").split()) or str(p["id"])
+    rel = os.path.join("profiles", "%s.pdf" % slug)
+    dest = os.path.join(ROOT, rel)
+    try:
+        if not os.path.isfile(dest) or os.path.getmtime(dest) < os.path.getmtime(src):
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            import shutil
+            shutil.copy2(src, dest)
+    except OSError:
+        return ""
+    return rel
+
+
 def write_snapshot():
     """research/people.json: who is in the tracker, for Claude to read."""
     if not os.path.isdir(ROOT):
@@ -418,6 +473,7 @@ def write_snapshot():
         row["has_prep"] = bool((p.get("prep_md") or "").strip())
         row["has_draft"] = bool((p.get("draft_body") or "").strip())
         row["saved_slots"] = (HOOKS["slot_lines"](p) if HOOKS["slot_lines"] else None) or []
+        row["profile_pdf"] = _share_profile_pdf(p)
         rows.append(row)
     tmp = os.path.join(ROOT, "people.json.tmp")
     with open(tmp, "w", encoding="utf-8") as fh:

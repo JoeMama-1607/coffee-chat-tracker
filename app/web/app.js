@@ -1,3 +1,5 @@
+let ACTION_FILTER = 'all';
+let SHOW_OTHERS = (() => { try { return localStorage.getItem('cct-show-others') === '1'; } catch (e) { return false; } })();
 /* Coffee Chat Tracker — interface logic. No frameworks, no network. */
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -254,24 +256,40 @@ function renderToday() {
       <button class="btn sm" data-app="${d.application_id}">Open</button></div>`),
   ].join('');
 
-  $('#actions').innerHTML = STATE.actions.length ? STATE.actions.map(a => `
-    <div class="action ${a.urgency} clickable" data-open="${a.person_id}">
+  const KIND_GROUP = { thankyou: 'thankyou', todo: 'followups', reply: 'followups', followup: 'nudges', stop: 'nudges' };
+  const groupOf = a => KIND_GROUP[a.kind] || 'followups';
+  const counts = { all: STATE.actions.length, thankyou: 0, followups: 0, nudges: 0 };
+  STATE.actions.forEach(a => { counts[groupOf(a)] += 1; });
+  const others = counts.followups + counts.nudges;
+  // Thank-yous always show. Follow-ups and nudges can be tucked away with one
+  // click; the choice is remembered on this Mac.
+  const toggle = others ? `<button class="fchip toggle" data-atoggle="1">${SHOW_OTHERS
+      ? 'Hide follow-ups &amp; nudges' : `Show follow-ups &amp; nudges <span>${others}</span>`}</button>` : '';
+  const filters = [['all', 'All'], ['thankyou', 'Thank-yous'], ['followups', 'Follow-ups'], ['nudges', 'Nudges']];
+  if (!SHOW_OTHERS || (!counts[ACTION_FILTER] && ACTION_FILTER !== 'all')) ACTION_FILTER = 'all';
+  $('#action-filter').innerHTML = (SHOW_OTHERS && STATE.actions.length ? filters.map(([k, l]) =>
+    `<button class="fchip f-${k}${ACTION_FILTER === k ? ' on' : ''}" data-afilter="${k}">${l} <span>${counts[k]}</span></button>`).join('') : '') + toggle;
+  const shown = STATE.actions.filter(a => (SHOW_OTHERS || groupOf(a) === 'thankyou')
+    && (ACTION_FILTER === 'all' || groupOf(a) === ACTION_FILTER));
+  $('#actions').innerHTML = shown.length ? shown.map(a => `
+    <div class="action ${a.urgency} k-${groupOf(a)}${a.person_id ? ' clickable' : ''}"${a.person_id ? ` data-open="${a.person_id}"` : ''}>
       <div class="grow">
         <span class="who">${esc(a.name)}</span>
         <span class="muted small">${a.firm ? ' · ' + esc(a.firm) : ''}</span>
         ${a.tier === 'A' ? '<span class="chip gold" style="margin-left:6px">Tier A</span>' : ''}
-        <div class="detail">${esc(a.label)} — ${esc(a.detail)}</div>
+        <div class="detail">${esc(a.label)}${a.detail ? ' — ' + esc(a.detail) : ''}</div>
       </div>
       ${a.kind === 'thankyou' ? (a.chat_done
         ? `<button class="btn gold sm" data-draft="thankyou" data-id="${a.person_id}">Draft thank-you</button>`
         : `<button class="btn sm" disabled title="Mark the chat as done first">Draft thank-you</button>`) : ''}
-      ${a.kind === 'followup' ? `<button class="btn gold sm" data-draft="followup" data-id="${a.person_id}">Draft nudge</button>` : ''}
-      <button class="btn sm" data-open="${a.person_id}">Open</button>
+      ${a.kind === 'followup' ? `<button class="btn nudge sm" data-draft="followup" data-id="${a.person_id}">Draft nudge</button>` : ''}
+      ${a.person_id ? `<button class="btn sm" data-open="${a.person_id}">Open</button>` : ''}
       <button class="btn ghost sm" data-resolve="${esc(a.key)}"
         title="Tick this off — it goes to the bin below">Done</button>
     </div>`).join('')
     : (deadlines.length || pending.length ? ''
-      : `<div class="card empty"><div class="big">✓</div>Nothing overdue. Good place to be.</div>`);
+      : `<div class="card empty"><div class="big">✓</div>${SHOW_OTHERS ? 'Nothing overdue. Good place to be.'
+          : 'No thank-yous due — nothing urgent right now.'}</div>`);
 
   // Ticked off this session, and still recoverable until the app is closed.
   const binned = STATE.bin || [];
@@ -306,7 +324,6 @@ function renderToday() {
       <div class="small muted">${esc([c.firm, c.role].filter(Boolean).join(' · '))}</div>
       <div class="now-when">${esc(c.when_label)} — ${esc(when)}</div>
       <div class="row" style="gap:6px;margin-top:10px">
-        <button class="btn gold sm" data-prep="${c.person_id}">Prep</button>
         <button class="btn sm" data-open="${c.person_id}">Open</button>
       </div>
     </div>`;
@@ -319,7 +336,6 @@ function renderToday() {
         <span class="muted small">${u.firm ? ' · ' + esc(u.firm) : ''}${u.role ? ' · ' + esc(u.role) : ''}</span>
         <div class="detail">${esc(u.when_label)}</div>
       </div>
-      <button class="btn gold sm" data-prep="${u.person_id}">Prep</button>
       <button class="btn sm" data-open="${u.person_id}">Open</button>
     </div>`).join('')
     : `<div class="card empty small">No chats on the calendar yet. Set a date on a
@@ -334,7 +350,7 @@ function renderToday() {
       return n === cf || cf.startsWith(n + ' ') || n.startsWith(cf + ' ');
     });
     return `<div class="cov">
-      <div>${fm ? `<span data-firm="${esc(fm.firm)}" title="Open ${esc(fm.firm)}" style="cursor:pointer;text-decoration:underline">${esc(c.firm)}</span>` : esc(c.firm)}</div>
+      <div>${esc(c.firm)}</div>
       <div class="bar">
         <span class="done" style="width:${pct(c.chatted)}"></span>
         <span class="sched" style="width:${pct(c.scheduled)}"></span>
@@ -452,7 +468,7 @@ function renderAwaiting() {
         <td style="text-align:right">${n.replied
           ? '<span class="chip st-ty">Replied</span>'
           : n.due
-            ? `<button class="btn gold sm" data-draft="followup" data-id="${p.id}">Draft nudge</button>`
+            ? `<button class="btn nudge sm" data-draft="followup" data-id="${p.id}">Draft nudge</button>`
             : n.capped ? '<span class="small faint">Nudge limit reached</span>'
             : `<span class="small faint">Nudge in ${Math.max(0, n.after - (n.days || 0))}d</span>`}</td>
       </tr>`).join('')}</tbody></table></div>`
@@ -653,7 +669,7 @@ async function openPerson(id, quiet = false) {
           : 'Available ' + nudge.after + ' days after your last email'}">${draftLabel}</button>`
     : (kind === 'thankyou' && !chatDone)
       ? `<button class="btn sm" disabled title="Mark the chat as done first">${draftLabel}</button>`
-      : `<button class="btn gold sm" data-draft="${kind}" data-id="${person.id}">${draftLabel}</button>`;
+      : `<button class="btn ${kind === 'followup' ? 'nudge' : 'gold'} sm" data-draft="${kind}" data-id="${person.id}">${draftLabel}</button>`;
 
   const sentBox = (kind, label) => `<label class="row" style="gap:4px;cursor:pointer">
       <input type="checkbox" data-sent-toggle="${kind}" ${sentMail(person, kind) ? 'checked' : ''}> ${label}</label>`;
@@ -666,7 +682,6 @@ async function openPerson(id, quiet = false) {
       ${sentBox('thankyou', 'Thank-you')}
     </div>
     <div class="row" style="margin-bottom:16px">
-      <button class="btn ${profileTone} sm" data-prep="${person.id}">Prep sheet${hasProfile ? ' ✓' : ' — start here'}</button>
       ${mailBtn('outreach', 'Draft outreach', 'Sent outreach')}
       ${mailBtn('followup', 'Draft nudge', 'Sent nudge')}
       ${mailBtn('thankyou', 'Draft thank-you', 'Sent thank-you')}
@@ -683,7 +698,7 @@ async function openPerson(id, quiet = false) {
         ${person.profile_pdf ? `<a class="btn ghost sm" href="#" data-stored-file="/api/profile-pdf/${person.id}">Open stored PDF</a>` : ''}
         <span class="small faint" id="d-pdf-note" style="flex:1;min-width:200px">
           ${person.linkedin_raw
-            ? 'Profile loaded — the prep sheet and outreach draft compare it against yours.'
+            ? 'Profile loaded — shared with Claude for research.'
             : 'On their profile: More → Save to PDF. Kept on this Mac.'}
         </span>
       </div>
@@ -856,7 +871,7 @@ async function openSentMail(personId, kind) {
     : `<div class="empty small">No copy was kept — this went out before the app started saving sent emails.</div>`;
   openModal(labels[kind] + ' — ' + person.name, `
     ${list}
-    ${kind === 'followup' ? `<div class="row"><button class="btn gold" id="m-another">Draft another nudge</button></div>` : ''}`);
+    ${kind === 'followup' ? `<div class="row"><button class="btn nudge" id="m-another">Draft another nudge</button></div>` : ''}`);
   const again = $('#m-another');
   if (again) again.onclick = () => openDraft(personId, 'followup');
 }
@@ -892,10 +907,12 @@ async function openDraft(personId, kind, slotLines) {
     ${gapNote}
     <label class="field"><span>Subject</span><input type="text" id="m-subject" value="${esc(draft.subject)}"></label>
     <label class="field"><span>Body</span><textarea id="m-text" rows="20">${esc(draft.body)}</textarea></label>
-    ${kind === 'thankyou' ? `<div class="row"><button class="btn primary" id="m-copy">Copy text</button></div>` : `
+    ${kind === 'thankyou' ? `<div class="row"><button class="btn primary" id="m-copy">Copy text</button>
+      <button class="btn" id="m-save">Save draft</button></div>` : `
     <div class="row">
       <button class="btn primary" id="m-open" data-id="${personId}" data-kind="${kind}">Open draft in Outlook</button>
       <button class="btn" id="m-copy">Copy text</button>
+      ${kind === 'outreach' ? '<button class="btn" id="m-save">Save draft</button>' : ''}
       <div class="spacer"></div>
       <span class="small faint">Nothing is sent. Outlook opens the draft for you to finish.</span>
     </div>`}`;
@@ -913,6 +930,20 @@ async function openDraft(personId, kind, slotLines) {
 
   $('#m-copy').onclick = async () => {
     toast(await copyText(textarea.value) ? 'Copied' : 'Could not copy — select the text manually');
+  };
+
+  if ($('#m-save')) $('#m-save').onclick = async (ev) => {
+    const btn = ev.currentTarget;
+    btn.disabled = true;
+    try {
+      await api('/api/draft', 'POST', {
+        person_id: personId, kind, save_only: true,
+        subject: $('#m-subject').value, body: textarea.value,
+      });
+      toast('Draft saved');
+    } catch (e) {
+      toast(e.message, true);
+    } finally { btn.disabled = false; }
   };
 
   if ($('#m-open')) $('#m-open').onclick = async (ev) => {
@@ -2027,7 +2058,6 @@ async function openApplication(id, quiet = false) {
                       ${firm.knowledge.length} note${firm.knowledge.length === 1 ? '' : 's'} on file`
                    : 'Not one of the six target firms — no firm page for it.'}</div>
         </div>
-        ${app.target_firm ? `<button class="btn sm" data-firm="${esc(app.target_firm)}">Open ${esc(app.target_firm)} page</button>` : ''}
       </div>
     </div>
 
@@ -2555,9 +2585,15 @@ async function testOutlook() {
 }
 
 document.addEventListener('click', async (ev) => {
-  const t = ev.target.closest('[data-view], [data-open], [data-prep], [data-slots], [data-pdf], [data-draft], [data-sent], [data-status], [data-copy-text], [data-delnote], [data-goto], [data-resolve], [data-restore]');
+  const t = ev.target.closest('[data-view], [data-open], [data-prep], [data-slots], [data-pdf], [data-draft], [data-sent], [data-status], [data-copy-text], [data-delnote], [data-goto], [data-resolve], [data-restore], [data-afilter], [data-atoggle]');
   if (!t) return;
 
+  if (t.dataset.atoggle) {
+    SHOW_OTHERS = !SHOW_OTHERS;
+    try { localStorage.setItem('cct-show-others', SHOW_OTHERS ? '1' : '0'); } catch (e) { /* not kept */ }
+    return renderToday();
+  }
+  if (t.dataset.afilter) { ACTION_FILTER = t.dataset.afilter; return renderToday(); }
   if (t.dataset.resolve) {
     const action = (STATE.actions || []).find(a => a.key === t.dataset.resolve);
     if (!action) return;
@@ -2898,6 +2934,20 @@ document.addEventListener('click', async (ev) => {
   if (id === 'btn-test-calendar' || id === 'btn-side-cal') return testCalendar();
   if (id === 'btn-test-outlook' || id === 'btn-side-outlook') return testOutlook();
 
+  if (id === 'btn-claude-import') {
+    try {
+      const res = await api('/api/import', 'POST', {});
+      const rs = res.results || [];
+      const bad = rs.filter(r => r.error);
+      const label = r => r.name || (r.type === 'firm_knowledge' ? `${r.firm} notes (+${r.added})` : r.file);
+      if (!rs.length) toast('Nothing new to import');
+      else if (bad.length) toast(`Imported ${rs.length - bad.length}; failed: ${bad.map(r => r.file + ' — ' + r.error).join('; ')}`, true);
+      else toast(`Imported: ${rs.map(label).join(', ')}`);
+      await refresh();
+    } catch (e) { toast(e.message || String(e), true); }
+    return;
+  }
+
   if (id === 'btn-cal-pull') {
     try {
       const res = await api('/api/calendar/pull', 'POST', {});
@@ -3011,7 +3061,7 @@ document.addEventListener('click', async (ev) => {
   }
 
   if (t.dataset.app) return openApplication(parseInt(t.dataset.app, 10));
-  if (t.dataset.firm) return openFirm(t.dataset.firm);
+  if (t.dataset.firm) return; // Firms page removed — firm insights live with Claude now
   if (t.dataset.accept) return decideProposal({ id: parseInt(t.dataset.accept, 10), status: 'accepted' });
   if (t.dataset.reject) return decideProposal({ id: parseInt(t.dataset.reject, 10), status: 'rejected' });
   if (t.dataset.editAccept) return openEditProposal(parseInt(t.dataset.editAccept, 10));

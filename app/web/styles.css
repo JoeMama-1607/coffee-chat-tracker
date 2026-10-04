@@ -519,3 +519,62 @@ mark.gap { background: rgba(242, 169, 0, .35); color: inherit; border-radius: 3p
 .prop:first-of-type { border-top: 0; }
 .prop .rationale { font-size: 12.5px; color: var(--text-muted); margin: 4px 0 8px; }
 @media (max-width: 720px) { .diff { grid-template-columns: 1fr; } }
+
+[hidden] { display: none !important; }
+
+/* ---- Needs action: colour by type (thank-you red, follow-up yellow,
+   nudge soft grey-blue). No priority labels — the colour carries it. ---- */
+:root {
+  --k-ty: #d64545;     --k-ty-bg: #fdf0f0;
+  --k-fu: #e8b400;     --k-fu-bg: #fff9e3;
+  --k-nu: #8fa4bd;     --k-nu-bg: #f3f6fa;
+  --claude: #d97757;   --claude-bg: #fbeee8;  --claude-ink: #8a3b1c;
+  --cal: #3b78c4;      --cal-bg: #e8f0fb;     --cal-ink: #1f4f8f;
+  --nudge-bg: #e6edf5; --nudge-bd: #c3d1e2;   --nudge-ink: #3f5672;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --k-ty: #ff8a80;   --k-ty-bg: #2e1a1a;
+    --k-fu: #f5c451;   --k-fu-bg: #2e2610;
+    --k-nu: #8ea3bd;   --k-nu-bg: #1b2231;
+    --claude-bg: #3a2219; --claude-ink: #f3b39b;
+    --cal-bg: #16273f;    --cal-ink: #9cc2f2;
+    --nudge-bg: #1f2a3b;  --nudge-bd: #34445c; --nudge-ink: #b5c4d8;
+  }
+}
+.action.k-thankyou  { border-left: 4px solid var(--k-ty); background: var(--k-ty-bg); }
+.action.k-followups { border-left: 4px solid var(--k-fu); background: var(--k-fu-bg); }
+.action.k-nudges    { border-left: 4px solid var(--k-nu); background: var(--k-nu-bg); }
+.action.k-nudges .who { font-weight: 550; }
+
+.action-filter { gap: 6px; margin: 0 0 10px; flex-wrap: wrap; }
+.fchip {
+  font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text-muted);
+}
+.fchip span { opacity: .7; margin-left: 2px; }
+.fchip.on { color: var(--text); border-color: var(--text-faint); font-weight: 600; }
+.fchip.f-thankyou.on  { border-color: var(--k-ty); background: var(--k-ty-bg); }
+.fchip.f-followups.on { border-color: var(--k-fu); background: var(--k-fu-bg); }
+.fchip.f-nudges.on    { border-color: var(--k-nu); background: var(--k-nu-bg); }
+
+.btn.nudge { background: var(--nudge-bg); border-color: var(--nudge-bd); color: var(--nudge-ink); }
+.btn.nudge:hover { filter: brightness(.97); border-color: var(--k-nu); }
+
+/* Sidebar: status dot + a small retry icon instead of "Test …" buttons. */
+.conn-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.retry {
+  border: 0; background: transparent; color: inherit; opacity: .6; cursor: pointer;
+  font-size: 14px; line-height: 1; padding: 2px 4px; border-radius: 4px;
+}
+.retry:hover { opacity: 1; background: rgba(255,255,255,.12); }
+
+/* The two pull buttons share one shape; Claude orange, Calendar blue. */
+.btn.pull { font-weight: 600; font-size: 11.5px; padding: 4px 6px; white-space: nowrap; }
+.btn.pull-claude { background: var(--claude-bg); border-color: var(--claude); color: var(--claude-ink); }
+.btn.pull-claude:hover { background: var(--claude); color: #fff; }
+.btn.pull-cal { background: var(--cal-bg); border-color: var(--cal); color: var(--cal-ink); }
+.btn.pull-cal:hover { background: var(--cal); color: #fff; }
+
+.fchip.toggle { margin-left: auto; border-style: dashed; }
+.fchip.toggle span { opacity: .7; }
