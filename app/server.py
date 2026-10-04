@@ -632,9 +632,52 @@ def draft_chat_confirmation(pid):
     return {"ok": True, "threaded": res.get("threaded", False), "demo": bool(res.get("demo"))}
 
 
+def open_actions():
+    """Today's actions as the app shows them, ticked-off ones left out."""
+    return compute_actions(db.list_people(), db.get_settings(), db.resolved_keys())
+
+
+def tick_action(action):
+    """Tick a Today action off. Ticking off "Send thank-you note" means it
+    went out, so the person moves to Thank-you sent."""
+    db.resolve_action(
+        action["key"], action.get("person_id"), action.get("kind", ""),
+        action.get("label", ""), action.get("detail", ""),
+        action.get("name", ""), SESSION,
+    )
+    if action.get("kind") == "thankyou" and action.get("person_id"):
+        person = db.get_person(int(action["person_id"]))
+        if person and person.get("status") != "thankyou_sent":
+            settings = db.get_settings()
+            stamp = dt.datetime.now(availability.get_tz(
+                settings.get("timezone", "America/New_York"))).isoformat()
+            db.update_person(person["id"], {
+                "status": "thankyou_sent", "thankyou_sent_at": stamp})
+
+
+def untick_action(key):
+    """Put it back on Today. Undoing a ticked-off thank-you also undoes the
+    status it set."""
+    conn = db.connect()
+    try:
+        row = conn.execute("SELECT kind, person_id FROM resolved_action "
+                           "WHERE key=?", (key,)).fetchone()
+    finally:
+        conn.close()
+    if row and row["kind"] == "thankyou" and row["person_id"]:
+        person = db.get_person(int(row["person_id"]))
+        if person and person.get("status") == "thankyou_sent":
+            db.update_person(person["id"], {"status": "chat_done",
+                                            "thankyou_sent_at": None})
+    db.restore_action(key)
+
+
 research.HOOKS["save_slots"] = save_offered_slots
 research.HOOKS["make_draft"] = outlook_draft_for
 research.HOOKS["slot_lines"] = lambda p: stored_slot_lines(p)
+research.HOOKS["open_actions"] = open_actions
+research.HOOKS["tick_action"] = tick_action
+research.HOOKS["untick_action"] = untick_action
 
 
 def roll_finished_chats(people, settings):
@@ -1381,38 +1424,14 @@ class Handler(BaseHTTPRequestHandler):
             key = (body.get("key") or "").strip()
             if not key:
                 return self._error("missing action key", 400)
-            db.resolve_action(
-                key, body.get("person_id"), body.get("kind", ""),
-                body.get("label", ""), body.get("detail", ""),
-                body.get("name", ""), SESSION,
-            )
-            # Ticking off "Send thank-you note" means it went out.
-            if body.get("kind") == "thankyou" and body.get("person_id"):
-                person = db.get_person(int(body["person_id"]))
-                if person and person.get("status") != "thankyou_sent":
-                    stamp = dt.datetime.now(availability.get_tz(
-                        settings.get("timezone", "America/New_York"))).isoformat()
-                    db.update_person(person["id"], {
-                        "status": "thankyou_sent", "thankyou_sent_at": stamp})
+            tick_action(dict(body, key=key))
             return self._json({"ok": True})
 
         if path == "/api/action/restore":
             key = (body.get("key") or "").strip()
             if not key:
                 return self._error("missing action key", 400)
-            # Undoing a ticked-off thank-you also undoes the status it set.
-            conn = db.connect()
-            try:
-                row = conn.execute("SELECT kind, person_id FROM resolved_action "
-                                   "WHERE key=?", (key,)).fetchone()
-            finally:
-                conn.close()
-            if row and row["kind"] == "thankyou" and row["person_id"]:
-                person = db.get_person(int(row["person_id"]))
-                if person and person.get("status") == "thankyou_sent":
-                    db.update_person(person["id"], {"status": "chat_done",
-                                                    "thankyou_sent_at": None})
-            db.restore_action(key)
+            untick_action(key)
             return self._json({"ok": True})
 
         if path == "/api/profile-pdf":

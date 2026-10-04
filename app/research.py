@@ -12,6 +12,9 @@ A file looks like:
   "name": "Jane Doe",                     # required; used to match
   "match_linkedin": "https://...",        # optional, better match than the name
   "person": {"firm": "Bain", "role": "...", "email": "...", ...},  # optional
+                                          # "status" too: one of db.STATUSES;
+                                          # "thankyou_sent" also stamps
+                                          # thankyou_sent_at, like Done does
   "research_md": "...",                   # journey summary, markdown
   "sources": [{"title": "...", "url": "..."}],
   "prep_md": "...",                       # prep sheet, markdown
@@ -60,14 +63,23 @@ be re-imported.
        {"kind": "application_update",
         "payload": {"match_id": 12, "status": "applied"}, "rationale": "..."}]}
 
+    {"type": "followups", "items": [{"key": "thankyou:12:2026-09-27T...", "done": true}]}
+
+Ticks a Today action off ("done": true, the default) or puts it back
+("done": false), by the key in research/actions.json. The label and detail
+stay as the app wrote them — the file only carries the key. A thank-you
+ticked off this way marks the person thank-you sent, exactly as in the app.
+A key that is neither open nor ticked off is reported in "not_found".
+
 Nothing from a transcript touches the tracker on import. Every item lands as a
 pending proposal and is applied only when it is accepted in Review. Items are
 keyed by their position and content inside the batch, so re-importing the same
 batch_id adds nothing and never resurrects something already decided.
 
-Four snapshots are written after every import and after any change made in the
+Five snapshots are written after every import and after any change made in the
 app, each atomically through a temp file: research/applications.json,
-research/firms.json, research/resume_walk.json, research/proposals.json —
+research/firms.json, research/resume_walk.json, research/proposals.json,
+research/actions.json (the open Today actions, with their keys) —
 plus research/people.json, unchanged. research/last_import.json reports what
 each file did, including its type and any error, so a write can be verified.
 """
@@ -86,7 +98,10 @@ DONE = os.path.join(ROOT, "imported")
 
 # Set by server.py: make_draft(person_id, kind, subject, body) -> dict, and
 # slot_lines(person) -> list | None. Kept as hooks to avoid a circular import.
-HOOKS = {"make_draft": None, "slot_lines": None, "save_slots": None}
+# open_actions() -> list, tick_action(action), untick_action(key) for
+# followups files.
+HOOKS = {"make_draft": None, "slot_lines": None, "save_slots": None,
+         "open_actions": None, "tick_action": None, "untick_action": None}
 
 # Person columns a research file may set directly.
 ALLOWED = {"email", "firm", "role", "office", "linkedin", "grad_year", "is_alum",
@@ -112,7 +127,17 @@ def _person_file(data, people, stamp):
     if not name:
         raise ValueError("no name")
     person = _find(people, name, data.get("match_linkedin"))
-    patch = {k: v for k, v in (data.get("person") or {}).items() if k in ALLOWED}
+    given = data.get("person") or {}
+    patch = {k: v for k, v in given.items() if k in ALLOWED}
+    if "status" in given:
+        statuses = {k for k, _ in db.STATUSES}
+        if given["status"] not in statuses:
+            raise ValueError("unknown status %r — one of %s"
+                             % (given["status"], ", ".join(sorted(statuses))))
+        patch["status"] = given["status"]
+        if given["status"] == "thankyou_sent" and not (
+                person and person.get("thankyou_sent_at")):
+            patch["thankyou_sent_at"] = stamp
     if person is None and data.get("require_existing"):
         raise LookupError("no one called %r in the tracker — fix the name "
                           "or drop require_existing" % name)
@@ -270,11 +295,43 @@ def _proposals_file(data, people, stamp):
             "person_wanted": who.get("name") or ""}
 
 
+def _followups_file(data, people, stamp):
+    """{"type": "followups", ...} — tick Today actions off, or back on, by key."""
+    if not all(HOOKS[k] for k in ("open_actions", "tick_action", "untick_action")):
+        raise RuntimeError("follow-ups unavailable")
+    items = data.get("items") or []
+    keys = [(item.get("key") or "").strip() for item in items]
+    if not all(keys):
+        raise ValueError("every item needs a key")
+    open_now = {a["key"]: a for a in HOOKS["open_actions"]()}
+    done, reopened, unchanged, missing = [], [], [], []
+    for key, item in zip(keys, items):
+        ticked = key in db.resolved_keys()
+        if item.get("done", True):
+            if ticked:
+                unchanged.append(key)
+            elif key in open_now:
+                HOOKS["tick_action"](open_now[key])
+                done.append(key)
+            else:
+                missing.append(key)
+        elif ticked:
+            HOOKS["untick_action"](key)
+            reopened.append(key)
+        elif key in open_now:
+            unchanged.append(key)
+        else:
+            missing.append(key)
+    return {"type": "followups", "done": done, "reopened": reopened,
+            "unchanged": unchanged, "not_found": missing}
+
+
 HANDLERS = {
     "person": _person_file,
     "application": _application_file,
     "firm_knowledge": _firm_knowledge_file,
     "proposals": _proposals_file,
+    "followups": _followups_file,
 }
 
 
@@ -358,6 +415,8 @@ def write_snapshots():
     _write("proposals.json", {"at": _now(),
                               "kinds": db.PROPOSAL_KINDS,
                               "proposals": db.list_proposals()})
+    if HOOKS["open_actions"]:
+        _write("actions.json", {"at": _now(), "actions": HOOKS["open_actions"]()})
 
 
 def firms_payload():
