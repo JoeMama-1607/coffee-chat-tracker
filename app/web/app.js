@@ -408,9 +408,107 @@ function renderPipeline() {
       ${STATE.people.length ? 'Nothing matches those filters.'
         : 'No one here yet. Start with second-years and younger consultants — they say yes most.'}</div>`;
 
+  renderCases();
   renderTracking();
   renderAwaiting();
   renderPipelineTree();
+}
+
+/* ---------------------------------------------------------- case sessions
+   A one-hour case with a partner or with Claude. Saving one puts it on the
+   calendar ("Partner case — Josie Kim" / "Case with Claude"); a partner case
+   also hands back the request email to copy, with the case log to download. */
+
+function caseWhen(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return iso || '—';
+  return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) +
+    ', ' + d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+}
+
+function renderCases() {
+  const box = $('#pipeline-cases');
+  if (!box) return;
+  const now = Date.now();
+  const list = (STATE.cases || []).filter(c => new Date(c.end_at).getTime() > now);
+  $('#cases-count').textContent = list.length ? `(${list.length})` : '';
+  box.innerHTML = list.length ? `<div class="table-wrap"><table>
+      <thead><tr><th>When</th><th>With</th><th>Email</th><th></th></tr></thead>
+      <tbody>${list.map(c => `<tr>
+        <td>${esc(caseWhen(c.start_at))}</td>
+        <td class="name">${c.kind === 'claude' ? 'Claude' : esc(c.person_name || 'Partner')}</td>
+        <td class="muted small">${esc(c.person_email || (c.kind === 'claude' ? '' : '—'))}</td>
+        <td><button class="btn ghost sm" data-case-cancel="${c.id}">Cancel</button></td>
+      </tr>`).join('')}</tbody></table></div>`
+    : `<div class="empty small">No cases scheduled. Use “Draft a case request” on a person, or “Case with Claude”.</div>`;
+}
+
+function openCaseRequest(personId, kind) {
+  const claude = kind === 'claude';
+  const person = personId ? STATE.people.find(p => p.id === Number(personId)) : null;
+  const day = new Date(Date.now() + 86400000);
+  const dayIso = day.getFullYear() + '-' + String(day.getMonth() + 1).padStart(2, '0') + '-' +
+    String(day.getDate()).padStart(2, '0');
+  const pick = claude || person ? '' : `
+    <label class="field"><span>Partner</span>
+      <select id="cr-person"><option value="">New partner (not in the tracker)…</option>
+      ${STATE.people.slice().sort((a, b) => a.name.localeCompare(b.name)).map(p =>
+        `<option value="${p.id}">${esc(p.name)}${p.firm ? ' — ' + esc(p.firm) : ''}</option>`).join('')}
+      </select></label>
+    <div class="grid-2" id="cr-new">
+      <label class="field"><span>Name</span><input type="text" id="cr-name" placeholder="Josie Kim"></label>
+      <label class="field"><span>Email</span><input type="email" id="cr-email" placeholder="josie@emory.edu"></label>
+    </div>`;
+  const title = claude ? 'Case with Claude' : person ? 'Partner case — ' + person.name : 'Partner case — <name>';
+  openModal(claude ? 'Schedule a case with Claude' : 'Draft a case request' + (person ? ' — ' + person.name : ''), `
+    ${pick}
+    <div class="grid-2">
+      <label class="field"><span>Date</span><input type="date" id="cr-date" value="${dayIso}"></label>
+      <label class="field"><span>Start time</span><input type="time" id="cr-time" value="16:00" step="900"></label>
+    </div>
+    <p class="small faint" style="margin-bottom:12px">One hour. Saving puts “${esc(title)}” on your calendar.</p>
+    <div class="row"><button class="btn primary" id="cr-save" data-kind="${claude ? 'claude' : 'partner'}"
+      data-person="${person ? person.id : ''}">${claude ? 'Save' : 'Save and draft the email'}</button></div>
+    <div id="cr-result" style="margin-top:14px"></div>`);
+}
+
+async function saveCaseRequest(btn) {
+  const body = { kind: btn.dataset.kind, date: $('#cr-date').value, time: $('#cr-time').value };
+  if (btn.dataset.kind === 'partner') {
+    const chosen = btn.dataset.person || ($('#cr-person') ? $('#cr-person').value : '');
+    if (chosen) body.person_id = Number(chosen);
+    else { body.name = $('#cr-name').value; body.email = $('#cr-email').value; }
+  }
+  btn.disabled = true;
+  try {
+    const res = await api('/api/case', 'POST', body);
+    const placed = res.calendar && (res.calendar.created || res.calendar.updated);
+    const calNote = placed || (res.calendar && res.calendar.demo)
+      ? `Added “${esc(res.title)}” to your calendar.`
+      : `Saved, but the calendar could not be updated${res.calendar && res.calendar.error ? ': ' + esc(res.calendar.error) : ''}.`;
+    if (!res.email) {
+      $('#cr-result').innerHTML = `<p class="small">${calNote}</p>`;
+      toast('Case with Claude scheduled');
+    } else {
+      const e = res.email;
+      $('#cr-result').innerHTML = `
+        <p class="small" style="margin-bottom:10px">${calNote}</p>
+        <label class="field"><span>To</span><input type="text" readonly value="${esc(e.to || 'No email on file')}"></label>
+        <label class="field"><span>Subject</span><input type="text" readonly id="cr-subject" value="${esc(e.subject)}"></label>
+        <label class="field"><span>Email</span><textarea id="cr-body" rows="8" readonly>${esc(e.body)}</textarea></label>
+        <div class="row" style="gap:8px">
+          <button class="btn gold sm" id="cr-copy">Copy email</button>
+          ${res.has_caselog ? '<button class="btn sm" data-stored-file="/api/case-log">Download case log</button>'
+            : '<span class="small faint">No case log saved — add it in Settings to download it here.</span>'}
+        </div>`;
+      toast('Case request saved');
+    }
+    btn.style.display = 'none';
+    refresh();
+  } catch (e) {
+    btn.disabled = false;
+    toast(e.message, true);
+  }
 }
 
 /* Everyone currently in "Tracking", pinned above the tree and table. */
@@ -686,6 +784,7 @@ async function openPerson(id, quiet = false) {
       ${mailBtn('followup', 'Draft nudge', 'Sent nudge')}
       ${mailBtn('thankyou', 'Draft thank-you', 'Sent thank-you')}
       <button class="btn sm" data-slots="${person.id}">Suggest slots</button>
+      <button class="btn sm" data-case-req="${person.id}">Draft a case request</button>
     </div>
 
     <div class="card" style="margin-bottom:16px;padding:12px 14px">
@@ -2447,6 +2546,17 @@ function fillSettings() {
     $('#btn-resume-remove').style.display = has ? '' : 'none';
   }
 
+  const logNote = $('#s-caselog-note');
+  if (logNote && !logNote.dataset.busy) {
+    const has = !!(s.caselog_name || '').trim();
+    logNote.innerHTML = has
+      ? `On file: <strong>${esc(s.caselog_name)}</strong> — offered for download with every case request.`
+      : 'The Excel from Locked In (Case Log → Share → Download Excel).';
+    $('#s-caselog-btn-label').textContent = has ? 'Replace case log' : 'Add your case log';
+    $('#btn-caselog-remove').style.display = has ? '' : 'none';
+    $('#btn-caselog-open').style.display = has ? '' : 'none';
+  }
+
   const note = $('#s-profile-note');
   if (note && !note.dataset.busy) {
     note.textContent = (s.user_profile_raw || '').trim()
@@ -2678,6 +2788,30 @@ document.addEventListener('change', async (ev) => {
     return refresh();
   }
 
+  if (ev.target.id === 'cr-person') {
+    const box = $('#cr-new');
+    if (box) box.style.display = ev.target.value ? 'none' : '';
+    return;
+  }
+
+  // Your case log, from Settings — offered for download with case requests.
+  if (ev.target.id === 's-caselog-file') {
+    const file = ev.target.files && ev.target.files[0];
+    ev.target.value = '';
+    if (!file) return;
+    const note = $('#s-caselog-note');
+    note.dataset.busy = '1';
+    note.textContent = `Saving ${file.name}…`;
+    try {
+      const res = await api('/api/case-log', 'POST', { name: file.name, data: await fileToBase64(file) });
+      toast(`Case log saved — ${res.name}`);
+    } catch (e) {
+      toast(e.message, true);
+    }
+    delete note.dataset.busy;
+    return refresh();
+  }
+
   // Your own LinkedIn PDF, from Settings.
   if (ev.target.id === 's-profile-pdf') {
     const file = ev.target.files && ev.target.files[0];
@@ -2753,6 +2887,32 @@ document.addEventListener('click', async (ev) => {
   if (id === 'd-close' || id === 'scrim') return closeDrawer();
   if (id === 'm-close' || (ev.target.classList.contains('modal'))) return closeModal();
   if (id === 'btn-add') return openAddPerson();
+  if (id === 'btn-case-request') return openCaseRequest(null, 'partner');
+  if (id === 'btn-case-claude') return openCaseRequest(null, 'claude');
+  if (id === 'cr-save') return saveCaseRequest(ev.target);
+  if (id === 'cr-copy') {
+    const text = 'Subject: ' + $('#cr-subject').value + '\n\n' + $('#cr-body').value;
+    return toast(await copyText(text) ? 'Email copied' : 'Could not copy — select the text manually',
+                 false);
+  }
+  if (id === 'btn-caselog-remove') {
+    try { await api('/api/case-log/remove', 'POST', {}); toast('Case log removed'); }
+    catch (e) { toast(e.message, true); }
+    return refresh();
+  }
+  const caseReq = ev.target.closest('[data-case-req]');
+  if (caseReq) return openCaseRequest(caseReq.dataset.caseReq, 'partner');
+  const caseCancel = ev.target.closest('[data-case-cancel]');
+  if (caseCancel) {
+    if (caseCancel.dataset.armed !== '1') {
+      caseCancel.dataset.armed = '1'; caseCancel.textContent = 'Really cancel?';
+      setTimeout(() => { caseCancel.dataset.armed = ''; caseCancel.textContent = 'Cancel'; }, 4000);
+      return;
+    }
+    try { await api('/api/case/cancel', 'POST', { id: Number(caseCancel.dataset.caseCancel) }); toast('Case cancelled and taken off your calendar'); }
+    catch (e) { toast(e.message, true); }
+    return refresh();
+  }
   if (id === 'btn-import') return openImport();
   if (id === 'tree-toggle') {
     TREE_MINIMIZED = !TREE_MINIMIZED;

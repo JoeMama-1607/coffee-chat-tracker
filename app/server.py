@@ -151,6 +151,109 @@ def pull_from_calendar(settings):
     return {"ok": True, "changes": changes}
 
 
+CASE_MINUTES = 60
+CASELOG_TYPES = {".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                 ".xls": "application/vnd.ms-excel", ".csv": "text/csv",
+                 ".pdf": "application/pdf"}
+
+
+def caselog_file(settings):
+    """The stored case log copy, if there is one and it can be read."""
+    path = (settings.get("caselog_file") or "").strip()
+    if path and os.path.isfile(path) and os.access(path, os.R_OK):
+        return path
+    return ""
+
+
+def case_title(session):
+    """'Partner case — Josie Kim' or 'Case with Claude' — the calendar event's
+    name, and how it is found again to cancel it."""
+    if session.get("kind") == "claude":
+        return "Case with Claude"
+    name = session.get("person_name") or ""
+    return "Partner case — %s" % name if name else "Partner case"
+
+
+def case_request_text(person, start, end, settings, has_log):
+    """The case request email: short, one slot, case log attached by hand."""
+    first = templates.first_name(person.get("name"))
+    when = "%s, %s–%s %s" % (availability.fmt_day(start.date()),
+                             availability.fmt_time(start), availability.fmt_time(end),
+                             settings.get("tz_label") or "ET")
+    lines = ["Hi %s," % first, "",
+             "I'd love to do a case with you. Would %s work for you?" % when]
+    if has_log:
+        lines.append("I've attached my case log so you can see what I've covered so far.")
+    lines += ["", "Looking forward to it!", ""]
+    subject = "Case practice — %s" % availability.fmt_day(start.date())
+    return subject, "\n".join(lines)
+
+
+def schedule_case(body):
+    """Save a one-hour case, with a partner or with Claude, and put it on the
+    calendar. A partner case also returns the request email to copy."""
+    settings = db.get_settings()
+    tz = availability.get_tz(settings.get("timezone", "America/New_York"))
+    kind = "claude" if body.get("kind") == "claude" else "partner"
+    try:
+        day = dt.date.fromisoformat((body.get("date") or "").strip())
+        hh, mm = [int(x) for x in (body.get("time") or "").strip().split(":")[:2]]
+        start = dt.datetime(day.year, day.month, day.day, hh, mm, tzinfo=tz)
+    except (ValueError, TypeError):
+        return {"ok": False, "error": "Pick a date and a start time."}
+    end = start + dt.timedelta(minutes=CASE_MINUTES)
+    person = None
+    if kind == "partner":
+        if body.get("person_id"):
+            person = db.get_person(int(body["person_id"]))
+            if not person:
+                return {"ok": False, "error": "person not found"}
+        else:
+            name = (body.get("name") or "").strip()
+            if not name:
+                return {"ok": False, "error": "Pick a person, or type a new partner's name."}
+            pid = db.create_person({"name": name, "email": (body.get("email") or "").strip(),
+                                    "status": "uninitiated", "source": "case partner"})
+            person = db.get_person(pid)
+    local = lambda m: m.astimezone(tz).replace(tzinfo=None).isoformat(timespec="minutes")
+    sid = db.add_case_session(kind, person["id"] if person else None, local(start), local(end))
+    session = db.get_case_session(sid)
+    title = case_title(session)
+    notes = ("Partner: %s\nEmail: %s\n\nScheduled by Coffee Chat Tracker." % (
+        person.get("name") or "", person.get("email") or "")) if person else (
+        "Practice case with Claude.\n\nScheduled by Coffee Chat Tracker.")
+    try:
+        calendar = macos.calendar_sync(upsert={
+            "prefix": title, "title": title, "start": start, "end": end, "notes": notes,
+            "calendar": settings.get("chat_calendar", ""), "match": None})
+    except macos.BridgeError as exc:
+        calendar = {"ok": False, "created": 0, "error": str(exc)}
+    out = {"ok": True, "session": session, "title": title, "calendar": calendar}
+    if person:
+        has_log = bool(caselog_file(settings))
+        subject, text = case_request_text(person, start, end, settings, has_log)
+        out["email"] = {"to": person.get("email") or "", "subject": subject, "body": text}
+        out["has_caselog"] = has_log
+    return out
+
+
+def cancel_case(sid):
+    """Mark it cancelled and take its event off the calendar."""
+    session = db.get_case_session(sid)
+    if not session:
+        return {"ok": False, "error": "case not found"}
+    settings = db.get_settings()
+    tz = availability.get_tz(settings.get("timezone", "America/New_York"))
+    start = dt.datetime.fromisoformat(session["start_at"]).replace(tzinfo=tz)
+    end = dt.datetime.fromisoformat(session["end_at"]).replace(tzinfo=tz)
+    try:
+        calendar = macos.calendar_sync(delete=[(case_title(session), start, end)])
+    except macos.BridgeError as exc:
+        calendar = {"ok": False, "deleted": 0, "error": str(exc)}
+    db.cancel_case_session(sid)
+    return {"ok": True, "calendar": calendar}
+
+
 def _chat_title(person):
     name = person.get("name") or ""
     return "Coffee chat — %s" % name if name else "Coffee chat"
@@ -1047,6 +1150,9 @@ def state_payload():
         "proposals": db.list_proposals(),
         "proposal_batches": db.proposal_batches(),
         "resume_walk": db.resume_walk(),
+        "cases": db.list_case_sessions(
+            since=dt.datetime.now(availability.get_tz(settings.get("timezone", "America/New_York")))
+            .replace(tzinfo=None).date().isoformat()),
     }
 
 
@@ -1198,6 +1304,14 @@ class Handler(BaseHTTPRequestHandler):
             ext = os.path.splitext(stored)[1].lower()
             with open(stored, "rb") as fh:
                 return self._file(fh.read(), RESUME_TYPES.get(ext, "application/octet-stream"),
+                                  os.path.basename(stored))
+        if path == "/api/case-log":
+            stored = caselog_file(db.get_settings())
+            if not stored:
+                return self._error("No case log saved yet — add it in Settings.", 404)
+            ext = os.path.splitext(stored)[1].lower()
+            with open(stored, "rb") as fh:
+                return self._file(fh.read(), CASELOG_TYPES.get(ext, "application/octet-stream"),
                                   os.path.basename(stored))
         if path.startswith("/api/profile-pdf/"):
             # Hand back the file that was uploaded, so it can be reopened from
@@ -1561,6 +1675,53 @@ class Handler(BaseHTTPRequestHandler):
             db.save_settings({"resume_file": stored, "resume_name": filename,
                               "resume_path": ""})
             return self._json({"ok": True, "name": filename, "bytes": len(blob)})
+
+        if path == "/api/case-log":
+            # Your case log (the Excel from Locked In), kept so a case request
+            # can offer it for download.
+            name = body.get("name") or ""
+            ext = os.path.splitext(name)[1].lower()
+            if ext not in CASELOG_TYPES:
+                return self._error("Please add your case log as an Excel (.xlsx), CSV or PDF file.", 400)
+            try:
+                blob = base64.b64decode(body.get("data") or "")
+            except Exception:
+                return self._error("That file could not be read.", 400)
+            if not blob:
+                return self._error("That file is empty.", 400)
+            if len(blob) > RESUME_MAX_BYTES:
+                return self._error("That file is over 10 MB.", 400)
+            folder = db.caselog_dir()
+            for old in os.listdir(folder):           # one case log at a time
+                try:
+                    os.remove(os.path.join(folder, old))
+                except OSError:
+                    pass
+            filename = os.path.splitext(_safe_filename(name, ext))[0]
+            filename = (filename if filename != "Resume" else "Case log") + ext
+            stored = os.path.join(folder, filename)
+            with open(stored, "wb") as fh:
+                fh.write(blob)
+            db.save_settings({"caselog_file": stored, "caselog_name": filename})
+            return self._json({"ok": True, "name": filename, "bytes": len(blob)})
+
+        if path == "/api/case-log/remove":
+            stored = caselog_file(settings)
+            if stored:
+                try:
+                    os.remove(stored)
+                except OSError:
+                    pass
+            db.save_settings({"caselog_file": "", "caselog_name": ""})
+            return self._json({"ok": True})
+
+        if path == "/api/case":
+            res = schedule_case(body)
+            return self._json(res) if res.get("ok") else self._error(res["error"], 400)
+
+        if path == "/api/case/cancel":
+            res = cancel_case(int(body.get("id") or 0))
+            return self._json(res) if res.get("ok") else self._error(res["error"], 404)
 
         if path == "/api/resume/remove":
             stored = resume_attachment(settings)

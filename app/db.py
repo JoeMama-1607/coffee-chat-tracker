@@ -27,6 +27,13 @@ def db_path():
     return os.path.join(data_dir(), "tracker.sqlite3")
 
 
+def caselog_dir():
+    """Where the uploaded case log copy lives, next to the resume copy."""
+    path = os.path.join(data_dir(), "caselog")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
 def resume_dir():
     """Where the uploaded resume copy lives, alongside the database.
 
@@ -128,6 +135,19 @@ CREATE TABLE IF NOT EXISTS resolved_action (
     person_name TEXT DEFAULT '',
     resolved_at TEXT DEFAULT CURRENT_TIMESTAMP,
     session     TEXT DEFAULT ''
+);
+
+-- A case you scheduled: with a partner (person_id set) or with Claude
+-- (kind 'claude', no person). Saving one puts it on the calendar; cancelling
+-- takes it off again. Times are naive local, the same as person.chat_at.
+CREATE TABLE IF NOT EXISTS case_session (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind        TEXT NOT NULL DEFAULT 'partner',   -- partner | claude
+    person_id   INTEGER REFERENCES person(id) ON DELETE SET NULL,
+    start_at    TEXT NOT NULL,
+    end_at      TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'scheduled', -- scheduled | cancelled
+    created_at  TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Follow-ups Claude adds after a chat (people to contact, things to watch
@@ -1263,5 +1283,59 @@ def list_followups():
             "SELECT f.*, p.name AS person_name FROM followup_item f "
             "LEFT JOIN person p ON p.id = f.person_id ORDER BY f.created_at").fetchall()
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+# ------------------------------------------------------------ case sessions
+
+def add_case_session(kind, person_id, start_at, end_at):
+    conn = connect()
+    try:
+        cur = conn.execute(
+            "INSERT INTO case_session(kind, person_id, start_at, end_at) VALUES (?,?,?,?)",
+            (kind, person_id, start_at, end_at))
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def get_case_session(sid):
+    conn = connect()
+    try:
+        row = conn.execute(
+            "SELECT c.*, p.name AS person_name, p.email AS person_email, p.firm AS person_firm "
+            "FROM case_session c LEFT JOIN person p ON p.id = c.person_id WHERE c.id=?",
+            (sid,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def list_case_sessions(since=None, include_cancelled=False):
+    """Case sessions starting on or after `since` (naive local ISO), oldest first."""
+    conn = connect()
+    try:
+        sql = ("SELECT c.*, p.name AS person_name, p.email AS person_email, "
+               "p.firm AS person_firm FROM case_session c "
+               "LEFT JOIN person p ON p.id = c.person_id WHERE 1=1 ")
+        args = []
+        if since:
+            sql += "AND c.start_at >= ? "
+            args.append(since)
+        if not include_cancelled:
+            sql += "AND c.status <> 'cancelled' "
+        sql += "ORDER BY c.start_at"
+        return [dict(r) for r in conn.execute(sql, args).fetchall()]
+    finally:
+        conn.close()
+
+
+def cancel_case_session(sid):
+    conn = connect()
+    try:
+        conn.execute("UPDATE case_session SET status='cancelled' WHERE id=?", (sid,))
+        conn.commit()
     finally:
         conn.close()

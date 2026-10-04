@@ -13,6 +13,7 @@ import unittest
 
 HOME = tempfile.mkdtemp()
 os.environ["HOME"] = HOME
+os.environ["CCT_DEMO"] = "1"   # never touch the real Calendar or Outlook
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import db  # noqa: E402
@@ -172,6 +173,81 @@ class ImportTest(unittest.TestCase):
         with open(os.path.join(self.root, "actions.json"), encoding="utf-8") as fh:
             keys = [a["key"] for a in json.load(fh)["actions"]]
         self.assertIn(action["key"], keys)
+
+
+class CaseSessionTest(unittest.TestCase):
+    """Case requests: saved, on the calendar (demo), in research/cases.json."""
+
+    setUp = ImportTest.setUp
+
+    def test_partner_case_for_existing_person(self):
+        pid = db.create_person({"name": "Josie Kim", "email": "josie@emory.edu"})
+        res = server.schedule_case({"kind": "partner", "person_id": pid,
+                                    "date": "2026-10-13", "time": "16:00"})
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["title"], "Partner case — Josie Kim")
+        self.assertEqual(res["session"]["start_at"], "2026-10-13T16:00")
+        self.assertEqual(res["session"]["end_at"], "2026-10-13T17:00")
+        self.assertTrue(res["calendar"]["created"])
+        self.assertEqual(res["email"]["to"], "josie@emory.edu")
+        self.assertIn("Hi Josie,", res["email"]["body"])
+        self.assertIn("4:00pm–5:00pm ET", res["email"]["body"])
+        # No case log saved, so the email doesn't claim one is attached.
+        self.assertFalse(res["has_caselog"])
+        self.assertNotIn("attached", res["email"]["body"])
+
+    def test_case_log_mentioned_once_saved(self):
+        pid = db.create_person({"name": "Josie Kim"})
+        path = os.path.join(db.caselog_dir(), "Case Log - Aashish.xlsx")
+        with open(path, "wb") as fh:
+            fh.write(b"PK\x03\x04")
+        db.save_settings({"caselog_file": path, "caselog_name": "Case Log - Aashish.xlsx"})
+        res = server.schedule_case({"kind": "partner", "person_id": pid,
+                                    "date": "2026-10-13", "time": "09:30"})
+        self.assertTrue(res["has_caselog"])
+        self.assertIn("attached my case log", res["email"]["body"])
+
+    def test_new_partner_is_created_uninitiated(self):
+        res = server.schedule_case({"kind": "partner", "name": "Sam Lee",
+                                    "email": "sam@emory.edu",
+                                    "date": "2026-10-14", "time": "10:00"})
+        self.assertTrue(res["ok"])
+        person = db.get_person(res["session"]["person_id"])
+        self.assertEqual(person["status"], "uninitiated")
+        self.assertEqual(person["email"], "sam@emory.edu")
+
+    def test_case_with_claude_has_no_email(self):
+        res = server.schedule_case({"kind": "claude", "date": "2026-10-15", "time": "19:00"})
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["title"], "Case with Claude")
+        self.assertNotIn("email", res)
+
+    def test_bad_time_rejected(self):
+        res = server.schedule_case({"kind": "claude", "date": "2026-10-15", "time": ""})
+        self.assertFalse(res["ok"])
+        self.assertEqual(db.list_case_sessions(), [])
+
+    def test_cancel_takes_it_off_and_out_of_snapshot(self):
+        keep = server.schedule_case({"kind": "claude", "date": "2099-01-05", "time": "19:00"})
+        drop = server.schedule_case({"kind": "claude", "date": "2099-01-06", "time": "19:00"})
+        res = server.cancel_case(drop["session"]["id"])
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["calendar"]["deleted"], 1)
+        research.write_snapshots()
+        with open(os.path.join(self.root, "cases.json"), encoding="utf-8") as fh:
+            cases = json.load(fh)["cases"]
+        self.assertEqual([c["id"] for c in cases], [keep["session"]["id"]])
+        self.assertEqual(cases[0]["name"], "Claude")
+        self.assertEqual(cases[0]["start"], "2099-01-05T19:00")
+
+    def test_people_snapshot_carries_introducer(self):
+        a = db.create_person({"name": "Mackenzie Heriford", "status": "thankyou_sent"})
+        db.create_person({"name": "Jeremy Lo", "status": "outreach_sent", "referred_by": a})
+        research.write_snapshot()
+        with open(os.path.join(self.root, "people.json"), encoding="utf-8") as fh:
+            rows = {r["name"]: r for r in json.load(fh)["people"]}
+        self.assertEqual(rows["Jeremy Lo"]["referred_by"], a)
+        self.assertEqual(rows["Jeremy Lo"]["referred_by_name"], "Mackenzie Heriford")
 
 
 if __name__ == "__main__":

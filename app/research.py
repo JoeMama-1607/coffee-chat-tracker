@@ -123,13 +123,15 @@ with "text" files a follow-up (above); an item without "text" ticks by key:
     does not fail the file, which still moves to research/imported/. An
     item without a key does fail the file.
 
-Six snapshots are written after every import and after any change made in the
+Seven snapshots are written after every import and after any change made in the
 app, each atomically through a temp file: research/applications.json,
 research/firms.json, research/resume_walk.json, research/proposals.json,
 research/actions.json (the open Today actions, with their keys),
-research/followups.json —
-plus research/people.json, which also carries last_outbound_at,
-last_inbound_at and followups_sent so Locked In can time nudges. actions.json lists each open action's
+research/followups.json,
+research/cases.json (case sessions from 30 days back, partner or Claude,
+naive local start/end) — plus research/people.json, which also carries
+last_outbound_at, last_inbound_at and followups_sent so Locked In can time
+nudges, and referred_by / referred_by_name for the firm tree. actions.json lists each open action's
 key, kind, person_id, name, label, detail and urgency; ticked-off actions are
 not in it. research/last_import.json reports what
 each file did, including its type and any error, so a write can be verified.
@@ -498,8 +500,20 @@ def write_snapshots():
     _write("proposals.json", {"at": _now(),
                               "kinds": db.PROPOSAL_KINDS,
                               "proposals": db.list_proposals()})
+    _write("cases.json", cases_payload())
     if HOOKS["open_actions"]:
         _write("actions.json", {"at": _now(), "actions": HOOKS["open_actions"]()})
+
+
+def cases_payload():
+    """Case sessions from 30 days back onwards, cancelled ones left out."""
+    since = (dt.datetime.now() - dt.timedelta(days=30)).date().isoformat()
+    return {"at": _now(), "minutes": 60, "cases": [
+        {"id": c["id"], "kind": c["kind"], "person_id": c["person_id"],
+         "name": c.get("person_name") or ("Claude" if c["kind"] == "claude" else ""),
+         "email": c.get("person_email") or "", "firm": c.get("person_firm") or "",
+         "start": c["start_at"], "end": c["end_at"]}
+        for c in db.list_case_sessions(since=since)]}
 
 
 def firms_payload():
@@ -571,7 +585,8 @@ def write_snapshot():
         return
     keep = ("id", "name", "firm", "role", "office", "email", "linkedin", "status",
             "grad_year", "is_alum", "chat_at", "researched_at",
-            "last_outbound_at", "last_inbound_at", "followups_sent")
+            "last_outbound_at", "last_inbound_at", "followups_sent",
+            "referred_by", "referred_by_name")
     rows = []
     for p in db.list_people(include_archived=False):
         row = {k: p.get(k) for k in keep}

@@ -88,8 +88,15 @@
           <p class="lede" style="margin-bottom:16px">Everyone you are talking to,
             and exactly where each conversation stands.</p>
         </div>
-        <button class="btn primary" id="btn-add">+ Add person</button>
+        <div class="row" style="gap:8px">
+          <button class="btn" id="btn-case-claude">Case with Claude</button>
+          <button class="btn" id="btn-case-request">Draft a case request</button>
+          <button class="btn primary" id="btn-add">+ Add person</button>
+        </div>
       </div>
+
+      <h2 style="margin:16px 0 8px">Upcoming cases <span class="small faint" id="cases-count"></span></h2>
+      <div id="pipeline-cases" style="margin-bottom:22px"></div>
 
       <h2 style="margin:16px 0 8px">Currently tracking <span class="small faint" id="tracking-count"></span></h2>
       <div id="pipeline-tracking" style="margin-bottom:22px"></div>
@@ -192,6 +199,18 @@
             <button class="btn ghost sm" id="btn-resume-remove" style="display:none">Remove</button>
             <span class="small faint" id="s-resume-note" style="flex:1;min-width:200px">PDF or Word.
               The app keeps its own copy, so it can always attach it.</span>
+          </div>
+        </div>
+        <div class="field" style="margin-bottom:12px">
+          <span class="field-label">Case log (offered for download with case requests)</span>
+          <div class="row" style="gap:8px">
+            <label class="btn sm" style="cursor:pointer;margin:0">
+              <span id="s-caselog-btn-label">Add your case log</span>
+              <input type="file" accept=".xlsx,.xls,.csv,.pdf" id="s-caselog-file" style="display:none">
+            </label>
+            <button class="btn ghost sm" id="btn-caselog-open" data-stored-file="/api/case-log">Open</button>
+            <button class="btn ghost sm" id="btn-caselog-remove" style="display:none">Remove</button>
+            <span class="small faint" id="s-caselog-note" style="flex:1;min-width:200px"></span>
           </div>
         </div>
         <label class="field"><span>Time zone</span><input type="text" id="s-timezone" placeholder="America/New_York"></label>
