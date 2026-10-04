@@ -18,6 +18,8 @@ A file looks like:
   "prep_md": "...",                       # prep sheet, markdown
   "draft_subject": "...",
   "draft_body": "... {{HORIZON}} ... {{SLOTS}} ...",
+  "thankyou_subject": "...",   # thank-you note, kept apart from the outreach draft
+  "thankyou_body": "...",
   "require_existing": true,              # refuse to create a new person
   "sent_emails": [{"kind": "outreach", "subject": "", "body": "...", "sent_at": "2026-09-22"}]
 }
@@ -66,6 +68,17 @@ pending proposal and is applied only when it is accepted in Review. Items are
 keyed by their position and content inside the batch, so re-importing the same
 batch_id adds nothing and never resurrects something already decided.
 
+File a follow-up after a chat — a followups file whose items carry "text":
+
+    {"type": "followups", "items": [
+       {"key": "pwc-csx-contact", "text": "Talk to someone in CSX",
+        "person": "Tanvi Joshi", "firm": "PwC", "due": "2026-11-12"}]}
+
+These show on Today in yellow. "key" is
+stable: re-importing updates the text, and a ticked-off key stays ticked off.
+"person" and "due" are optional. research/followups.json lists them with a
+"done" flag.
+
 Actions taken in Locked In come back as two shapes, applied straight away.
 
 Set a person's status — a person file with only a status:
@@ -84,7 +97,8 @@ Set a person's status — a person file with only a status:
   - Keep "require_existing": true so a misspelt name fails instead of
     creating a new person. Match on "match_linkedin" when the name is shared.
 
-Tick a follow-up done — a followups file, one item per Today action:
+Tick a follow-up done — a followups file, one item per Today action. An item
+with "text" files a follow-up (above); an item without "text" ticks by key:
 
     {"type": "followups", "items": [
        {"key": "thankyou:12:2026-09-27T14:00:00-04:00", "done": true},
@@ -96,7 +110,7 @@ Tick a follow-up done — a followups file, one item per Today action:
     or a moved chat mints a new key and the old one comes back "not_found".
   - "done": true (the default) ticks the action off, exactly like its tick in
     the app; "done": false puts a ticked-off action back on Today.
-  - Only the key is read. The label and detail stay as the app wrote them;
+  - Only the key and "done" are read. The label and detail stay as the app wrote them;
     any other keys on an item are ignored.
   - Ticking a "thankyou" action also sets the person to thankyou_sent with
     thankyou_sent_at, and putting it back returns them to chat_done — the
@@ -107,10 +121,11 @@ Tick a follow-up done — a followups file, one item per Today action:
     does not fail the file, which still moves to research/imported/. An
     item without a key does fail the file.
 
-Five snapshots are written after every import and after any change made in the
+Six snapshots are written after every import and after any change made in the
 app, each atomically through a temp file: research/applications.json,
 research/firms.json, research/resume_walk.json, research/proposals.json,
-research/actions.json (the open Today actions, with their keys) —
+research/actions.json (the open Today actions, with their keys),
+research/followups.json —
 plus research/people.json, unchanged. actions.json lists each open action's
 key, kind, person_id, name, label, detail and urgency; ticked-off actions are
 not in it. research/last_import.json reports what
@@ -183,7 +198,8 @@ def _person_file(data, people, stamp):
         if patch:
             db.update_person(pid, patch)
     extra = {}
-    for key in ("research_md", "prep_md", "draft_subject", "draft_body"):
+    for key in ("research_md", "prep_md", "draft_subject", "draft_body",
+                "thankyou_subject", "thankyou_body"):
         if key in data:
             extra[key] = data[key] or ""
     if "sources" in data:
@@ -329,16 +345,36 @@ def _proposals_file(data, people, stamp):
 
 
 def _followups_file(data, people, stamp):
-    """{"type": "followups", ...} — tick Today actions off, or back on, by key."""
-    if not all(HOOKS[k] for k in ("open_actions", "tick_action", "untick_action")):
-        raise RuntimeError("follow-ups unavailable")
+    """{"type": "followups", "items": [...]} — two kinds of item, mixable:
+    with "text", file a follow-up ({"key", "text", "person", "firm", "due"});
+    re-importing the same key updates the text, and a key ticked off in the app
+    stays ticked off. Without "text", tick a Today action off ("done": true,
+    the default) or back on ("done": false) by its key from actions.json."""
     items = data.get("items") or []
     keys = [(item.get("key") or "").strip() for item in items]
     if not all(keys):
         raise ValueError("every item needs a key")
-    open_now = {a["key"]: a for a in HOOKS["open_actions"]()}
-    done, reopened, unchanged, missing = [], [], [], []
+    ticks = [(k, i) for k, i in zip(keys, items) if "text" not in i]
+    if ticks and not all(HOOKS[k] for k in ("open_actions", "tick_action", "untick_action")):
+        raise RuntimeError("follow-ups unavailable")
+    added = 0
     for key, item in zip(keys, items):
+        if "text" not in item:
+            continue
+        text = (item.get("text") or "").strip()
+        if not text:
+            raise ValueError("every follow-up needs a key and text")
+        pid = None
+        if item.get("person"):
+            hit = _find(people, item["person"], item.get("match_linkedin"))
+            if hit is None:
+                raise LookupError("no one called %r in the tracker" % item["person"])
+            pid = hit["id"]
+        db.upsert_followup(key, text, pid, item.get("firm", ""), item.get("due", ""))
+        added += 1
+    open_now = {a["key"]: a for a in HOOKS["open_actions"]()} if ticks else {}
+    done, reopened, unchanged, missing = [], [], [], []
+    for key, item in ticks:
         ticked = key in db.resolved_keys()
         if item.get("done", True):
             if ticked:
@@ -355,11 +391,12 @@ def _followups_file(data, people, stamp):
             unchanged.append(key)
         else:
             missing.append(key)
-    return {"type": "followups", "done": done, "reopened": reopened,
-            "unchanged": unchanged, "not_found": missing}
+    return {"type": "followups", "upserted": added, "done": done,
+            "reopened": reopened, "unchanged": unchanged, "not_found": missing}
 
 
 HANDLERS = {
+    "followups": _followups_file,
     "person": _person_file,
     "application": _application_file,
     "firm_knowledge": _firm_knowledge_file,
@@ -382,7 +419,7 @@ def _one(path, people, stamp):
 
 
 # Settings a research file may set (research/inbox/settings.json, no "name").
-SETTING_KEYS = {"zoom_link", "hold_calendar", "chat_calendar"}
+SETTING_KEYS = {"zoom_link", "zoom_meeting_id", "zoom_passcode", "hold_calendar", "chat_calendar"}
 
 
 def import_inbox():
@@ -445,6 +482,9 @@ def write_snapshots():
                                 "applications": db.list_applications()})
     _write("firms.json", {"at": _now(), "firms": firms_payload()})
     _write("resume_walk.json", resume_walk_payload())
+    resolved = db.resolved_keys()
+    _write("followups.json", {"at": _now(), "followups": [
+        dict(f, done=("todo:" + f["key"]) in resolved) for f in db.list_followups()]})
     _write("proposals.json", {"at": _now(),
                               "kinds": db.PROPOSAL_KINDS,
                               "proposals": db.list_proposals()})
@@ -495,6 +535,26 @@ def resume_walk_payload():
                          for v in walk["versions"]]}
 
 
+def _share_profile_pdf(p):
+    """Copy an uploaded LinkedIn PDF to research/profiles/ so Claude can read
+    it (the original lives in ~/Library, out of Claude's reach). Returns the
+    path relative to research/, or "" when there is none."""
+    src = p.get("profile_pdf") or ""
+    if not src or not os.path.isfile(src):
+        return ""
+    slug = "-".join(_norm(p.get("name")).replace("/", " ").split()) or str(p["id"])
+    rel = os.path.join("profiles", "%s.pdf" % slug)
+    dest = os.path.join(ROOT, rel)
+    try:
+        if not os.path.isfile(dest) or os.path.getmtime(dest) < os.path.getmtime(src):
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            import shutil
+            shutil.copy2(src, dest)
+    except OSError:
+        return ""
+    return rel
+
+
 def write_snapshot():
     """research/people.json: who is in the tracker, for Claude to read."""
     if not os.path.isdir(ROOT):
@@ -507,6 +567,7 @@ def write_snapshot():
         row["has_prep"] = bool((p.get("prep_md") or "").strip())
         row["has_draft"] = bool((p.get("draft_body") or "").strip())
         row["saved_slots"] = (HOOKS["slot_lines"](p) if HOOKS["slot_lines"] else None) or []
+        row["profile_pdf"] = _share_profile_pdf(p)
         rows.append(row)
     tmp = os.path.join(ROOT, "people.json.tmp")
     with open(tmp, "w", encoding="utf-8") as fh:

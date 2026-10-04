@@ -1,3 +1,5 @@
+let ACTION_FILTER = 'all';
+let SHOW_OTHERS = (() => { try { return localStorage.getItem('cct-show-others') === '1'; } catch (e) { return false; } })();
 /* Coffee Chat Tracker — interface logic. No frameworks, no network. */
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -254,22 +256,40 @@ function renderToday() {
       <button class="btn sm" data-app="${d.application_id}">Open</button></div>`),
   ].join('');
 
-  $('#actions').innerHTML = STATE.actions.length ? STATE.actions.map(a => `
-    <div class="action ${a.urgency} clickable" data-open="${a.person_id}">
+  const KIND_GROUP = { thankyou: 'thankyou', todo: 'followups', reply: 'followups', followup: 'nudges', stop: 'nudges' };
+  const groupOf = a => KIND_GROUP[a.kind] || 'followups';
+  const counts = { all: STATE.actions.length, thankyou: 0, followups: 0, nudges: 0 };
+  STATE.actions.forEach(a => { counts[groupOf(a)] += 1; });
+  const others = counts.followups + counts.nudges;
+  // Thank-yous always show. Follow-ups and nudges can be tucked away with one
+  // click; the choice is remembered on this Mac.
+  const toggle = others ? `<button class="fchip toggle" data-atoggle="1">${SHOW_OTHERS
+      ? 'Hide follow-ups &amp; nudges' : `Show follow-ups &amp; nudges <span>${others}</span>`}</button>` : '';
+  const filters = [['all', 'All'], ['thankyou', 'Thank-yous'], ['followups', 'Follow-ups'], ['nudges', 'Nudges']];
+  if (!SHOW_OTHERS || (!counts[ACTION_FILTER] && ACTION_FILTER !== 'all')) ACTION_FILTER = 'all';
+  $('#action-filter').innerHTML = (SHOW_OTHERS && STATE.actions.length ? filters.map(([k, l]) =>
+    `<button class="fchip f-${k}${ACTION_FILTER === k ? ' on' : ''}" data-afilter="${k}">${l} <span>${counts[k]}</span></button>`).join('') : '') + toggle;
+  const shown = STATE.actions.filter(a => (SHOW_OTHERS || groupOf(a) === 'thankyou')
+    && (ACTION_FILTER === 'all' || groupOf(a) === ACTION_FILTER));
+  $('#actions').innerHTML = shown.length ? shown.map(a => `
+    <div class="action ${a.urgency} k-${groupOf(a)}${a.person_id ? ' clickable' : ''}"${a.person_id ? ` data-open="${a.person_id}"` : ''}>
       <div class="grow">
         <span class="who">${esc(a.name)}</span>
         <span class="muted small">${a.firm ? ' · ' + esc(a.firm) : ''}</span>
         ${a.tier === 'A' ? '<span class="chip gold" style="margin-left:6px">Tier A</span>' : ''}
-        <div class="detail">${esc(a.label)} — ${esc(a.detail)}</div>
+        <div class="detail">${esc(a.label)}${a.detail ? ' — ' + esc(a.detail) : ''}</div>
       </div>
-      ${a.kind === 'thankyou' ? `<button class="btn gold sm" data-draft="thankyou" data-id="${a.person_id}">Draft thank-you</button>` : ''}
-      ${a.kind === 'followup' ? `<button class="btn gold sm" data-draft="followup" data-id="${a.person_id}">Draft nudge</button>` : ''}
-      <button class="btn sm" data-open="${a.person_id}">Open</button>
+      ${a.kind === 'thankyou' ? (a.chat_done
+        ? `<button class="btn gold sm" data-draft="thankyou" data-id="${a.person_id}">Draft thank-you</button>`
+        : `<button class="btn sm" disabled title="Mark the chat as done first">Draft thank-you</button>`) : ''}
+      ${a.kind === 'followup' ? `<button class="btn nudge sm" data-draft="followup" data-id="${a.person_id}">Draft nudge</button>` : ''}
+      ${a.person_id ? `<button class="btn sm" data-open="${a.person_id}">Open</button>` : ''}
       <button class="btn ghost sm" data-resolve="${esc(a.key)}"
         title="Tick this off — it goes to the bin below">Done</button>
     </div>`).join('')
     : (deadlines.length || pending.length ? ''
-      : `<div class="card empty"><div class="big">✓</div>Nothing overdue. Good place to be.</div>`);
+      : `<div class="card empty"><div class="big">✓</div>${SHOW_OTHERS ? 'Nothing overdue. Good place to be.'
+          : 'No thank-yous due — nothing urgent right now.'}</div>`);
 
   // Ticked off this session, and still recoverable until the app is closed.
   const binned = STATE.bin || [];
@@ -304,7 +324,6 @@ function renderToday() {
       <div class="small muted">${esc([c.firm, c.role].filter(Boolean).join(' · '))}</div>
       <div class="now-when">${esc(c.when_label)} — ${esc(when)}</div>
       <div class="row" style="gap:6px;margin-top:10px">
-        <button class="btn gold sm" data-prep="${c.person_id}">Prep</button>
         <button class="btn sm" data-open="${c.person_id}">Open</button>
       </div>
     </div>`;
@@ -317,7 +336,6 @@ function renderToday() {
         <span class="muted small">${u.firm ? ' · ' + esc(u.firm) : ''}${u.role ? ' · ' + esc(u.role) : ''}</span>
         <div class="detail">${esc(u.when_label)}</div>
       </div>
-      <button class="btn gold sm" data-prep="${u.person_id}">Prep</button>
       <button class="btn sm" data-open="${u.person_id}">Open</button>
     </div>`).join('')
     : `<div class="card empty small">No chats on the calendar yet. Set a date on a
@@ -326,6 +344,11 @@ function renderToday() {
   $('#coverage').innerHTML = STATE.coverage.length ? STATE.coverage.map(c => {
     const total = Math.max(c.total, 1);
     const pct = n => (n / total * 100).toFixed(1) + '%';
+    const cf = (c.firm || '').trim().toLowerCase();
+    const fm = cf && (STATE.firms || []).find(x => {
+      const n = (x.firm || '').toLowerCase();
+      return n === cf || cf.startsWith(n + ' ') || n.startsWith(cf + ' ');
+    });
     return `<div class="cov">
       <div>${esc(c.firm)}</div>
       <div class="bar">
@@ -385,7 +408,71 @@ function renderPipeline() {
       ${STATE.people.length ? 'Nothing matches those filters.'
         : 'No one here yet. Start with second-years and younger consultants — they say yes most.'}</div>`;
 
+  renderTracking();
+  renderAwaiting();
   renderPipelineTree();
+}
+
+/* Everyone currently in "Tracking", pinned above the tree and table. */
+function renderTracking() {
+  const box = $('#pipeline-tracking');
+  if (!box) return;
+  const list = STATE.people.filter(p => p.status === 'tracking')
+    .sort((a, b) => (a.firm || '').localeCompare(b.firm || '') || a.name.localeCompare(b.name));
+  $('#tracking-count').textContent = list.length ? `(${list.length})` : '';
+  box.innerHTML = list.length ? `<div class="table-wrap"><table>
+      <thead><tr><th>Name</th><th>Firm</th><th>Role</th><th>Draft</th><th>Chat</th><th></th></tr></thead>
+      <tbody>${list.map(p => `<tr data-id="${p.id}">
+        <td class="name" data-open="${p.id}">${esc(p.name)}</td>
+        <td data-open="${p.id}">${esc(p.firm || '—')}</td>
+        <td class="muted" data-open="${p.id}">${esc(p.role || '—')}</td>
+        <td class="muted small" data-open="${p.id}">${p.has_draft || p.draft_body ? 'Ready' : '—'}</td>
+        <td class="muted small" data-open="${p.id}">${p.chat_at ? dateLabel(p.chat_at) : '—'}</td>
+        <td><button class="btn ghost sm" data-open="${p.id}">›</button></td>
+      </tr>`).join('')}</tbody></table></div>`
+    : `<div class="empty small">No one is in Tracking right now.</div>`;
+}
+
+/* When a nudge is due: N days (Settings) after the last email you sent, as
+   long as they haven't written back since and you're under the nudge cap.
+   Returns { sentAt, days, due, replied, capped }. */
+function nudgeState(p) {
+  const s = STATE.settings || {};
+  const after = parseInt(s.followup_after_days, 10) || 7;
+  const cap = parseInt(s.max_followups, 10) || 3;
+  const sentAt = p.last_outbound_at || p.first_contact_at || '';
+  const sent = sentAt ? new Date(sentAt) : null;
+  const days = sent && !isNaN(sent) ? Math.floor((Date.now() - sent.getTime()) / 86400000) : null;
+  const replied = !!(p.last_inbound_at && sentAt && new Date(p.last_inbound_at) > sent);
+  const capped = (parseInt(p.followups_sent, 10) || 0) >= cap;
+  return { sentAt, days, after, replied, capped,
+           due: days !== null && days >= after && !replied && !capped };
+}
+
+/* Everyone whose outreach has gone out and who hasn't booked a chat yet. */
+function renderAwaiting() {
+  const box = $('#pipeline-awaiting');
+  if (!box) return;
+  const list = STATE.people.filter(p => p.status === 'outreach_sent')
+    .map(p => ({ p, n: nudgeState(p) }))
+    .sort((a, b) => (a.n.sentAt || '').localeCompare(b.n.sentAt || ''));
+  $('#awaiting-count').textContent = list.length ? `(${list.length})` : '';
+  box.innerHTML = list.length ? `<div class="table-wrap"><table>
+      <thead><tr><th>Name</th><th>Firm</th><th>Outreach sent</th><th>Days</th><th>Nudges</th><th></th></tr></thead>
+      <tbody>${list.map(({ p, n }) => `<tr data-id="${p.id}">
+        <td class="name" data-open="${p.id}">${esc(p.name)}</td>
+        <td data-open="${p.id}">${esc(p.firm || '—')}</td>
+        <td class="small" data-open="${p.id}">${n.sentAt ? esc(dateLabel(n.sentAt)) : '—'}</td>
+        <td class="muted small" data-open="${p.id}">${n.days === null ? '—' : n.days + 'd'}</td>
+        <td class="muted small" data-open="${p.id}">${parseInt(p.followups_sent, 10) || 0}</td>
+        <td style="text-align:right">${n.replied
+          ? '<span class="chip st-ty">Replied</span>'
+          : n.due
+            ? `<button class="btn nudge sm" data-draft="followup" data-id="${p.id}">Draft nudge</button>`
+            : n.capped ? '<span class="small faint">Nudge limit reached</span>'
+            : `<span class="small faint">Nudge in ${Math.max(0, n.after - (n.days || 0))}d</span>`}</td>
+      </tr>`).join('')}</tbody></table></div>`
+    : `<div class="empty small">No outreach waiting on a reply.</div>`;
 }
 
 /* Who you've talked to, grouped by company, each company's own referral
@@ -470,7 +557,7 @@ function renderPipelineTree() {
       .sort((a, b) => a.name.localeCompare(b.name));
     const isOpen = !TREE_COLLAPSED_FIRMS.has(firm);
 
-    return `<details class="paste-box tree-firm"${isOpen ? ' open' : ''} data-firm="${esc(firm)}">
+    return `<details class="paste-box tree-firm"${isOpen ? ' open' : ''} data-tree-firm="${esc(firm)}">
       <summary>${esc(firm)} <span class="small faint">(${members.length})</span></summary>
       <div style="margin-top:8px">
         ${roots.map(r => renderNode(r, byId, childrenOf, 0)).join('')}
@@ -556,12 +643,7 @@ async function openPerson(id, quiet = false) {
         </span>
       </div>
       ${person.status === 'scheduled' ? `<div class="row" style="gap:8px;margin-top:10px">
-        <button class="btn ${person.invite_drafted_at ? 'primary' : 'gold'} sm" id="d-invite">
-          ${person.invite_drafted_at ? 'Invite drafted ✓ — again' : 'Draft invite'}</button>
-        <button class="btn ${person.confirm_drafted_at ? 'primary' : 'gold'} sm" id="d-confirm-mail">
-          ${person.confirm_drafted_at ? 'Confirmation drafted ✓ — again' : 'Draft confirmation email'}</button>
-        <span class="small faint" style="flex:1;min-width:180px">Opens in Outlook for you to send.
-          Invite: ${esc((person.name || '').trim().split(' ')[0])} x ${esc(((STATE.settings.user_name || 'Aashish').trim().split(' ')[0]))} - Coffee Chat, 30 min, resume attached${STATE.settings.zoom_link ? ', Zoom link' : ' (no Zoom link set in Settings)'}.</span>
+        <button class="btn gold sm" id="d-confirm-mail">Confirmation email</button>
       </div>` : ''}
       <div id="d-chat-editor" style="display:none;margin-top:10px">
         <div class="row" style="gap:8px">
@@ -577,13 +659,29 @@ async function openPerson(id, quiet = false) {
   /* Orange = still to do, blue = done. Prep sheet and the LinkedIn upload are
      yellow until the PDF is in. */
   const profileTone = hasProfile ? 'primary' : 'yellow';
+  const chatDone = ['chat_done', 'thankyou_sent'].includes(person.status);
+  const nudge = nudgeState(person);
   const mailBtn = (kind, draftLabel, sentLabel) => sentMail(person, kind)
     ? `<button class="btn primary sm" data-sent="${kind}" data-id="${person.id}">${sentLabel}</button>`
-    : `<button class="btn gold sm" data-draft="${kind}" data-id="${person.id}">${draftLabel}</button>`;
+    : (kind === 'followup' && !nudge.due)
+      ? `<button class="btn sm" disabled title="${nudge.replied ? 'They replied'
+          : nudge.days === null ? 'Send the outreach first'
+          : 'Available ' + nudge.after + ' days after your last email'}">${draftLabel}</button>`
+    : (kind === 'thankyou' && !chatDone)
+      ? `<button class="btn sm" disabled title="Mark the chat as done first">${draftLabel}</button>`
+      : `<button class="btn ${kind === 'followup' ? 'nudge' : 'gold'} sm" data-draft="${kind}" data-id="${person.id}">${draftLabel}</button>`;
 
+  const sentBox = (kind, label) => `<label class="row" style="gap:4px;cursor:pointer">
+      <input type="checkbox" data-sent-toggle="${kind}" ${sentMail(person, kind) ? 'checked' : ''}> ${label}</label>`;
   $('#drawer-body').innerHTML = `
+    <div class="card row" style="margin-bottom:12px;padding:10px 14px;gap:14px">
+      <strong class="small">Sent:</strong>
+      ${sentBox('outreach', 'Outreach')}
+      ${sentBox('followup', 'Nudge')}
+      ${sentBox('confirmation', 'Confirmation')}
+      ${sentBox('thankyou', 'Thank-you')}
+    </div>
     <div class="row" style="margin-bottom:16px">
-      <button class="btn ${profileTone} sm" data-prep="${person.id}">Prep sheet${hasProfile ? ' ✓' : ' — start here'}</button>
       ${mailBtn('outreach', 'Draft outreach', 'Sent outreach')}
       ${mailBtn('followup', 'Draft nudge', 'Sent nudge')}
       ${mailBtn('thankyou', 'Draft thank-you', 'Sent thank-you')}
@@ -600,7 +698,7 @@ async function openPerson(id, quiet = false) {
         ${person.profile_pdf ? `<a class="btn ghost sm" href="#" data-stored-file="/api/profile-pdf/${person.id}">Open stored PDF</a>` : ''}
         <span class="small faint" id="d-pdf-note" style="flex:1;min-width:200px">
           ${person.linkedin_raw
-            ? 'Profile loaded — the prep sheet and outreach draft compare it against yours.'
+            ? 'Profile loaded — shared with Claude for research.'
             : 'On their profile: More → Save to PDF. Kept on this Mac.'}
         </span>
       </div>
@@ -740,7 +838,14 @@ function closeModal() { $('#modal').classList.remove('open'); }
 
 /* Has this kind of email gone to Outlook for them? Saved copies first; for
    people contacted before copies were kept, fall back to the pipeline dates. */
+function sentFlags(person) {
+  try { return JSON.parse(person.sent_flags || '{}') || {}; } catch (e) { return {}; }
+}
+
 function sentMail(person, kind) {
+  const flags = sentFlags(person);
+  if (kind in flags) return !!flags[kind];
+  if (kind === 'confirmation') return !!person.confirm_drafted_at;
   const saved = (person.sent_mail || []).some(m => m.kind === kind);
   if (saved) return true;
   if (kind === 'outreach') return !!person.first_contact_at || (person.status && !['uninitiated', 'tracking'].includes(person.status));
@@ -766,7 +871,7 @@ async function openSentMail(personId, kind) {
     : `<div class="empty small">No copy was kept — this went out before the app started saving sent emails.</div>`;
   openModal(labels[kind] + ' — ' + person.name, `
     ${list}
-    ${kind === 'followup' ? `<div class="row"><button class="btn gold" id="m-another">Draft another nudge</button></div>` : ''}`);
+    ${kind === 'followup' ? `<div class="row"><button class="btn nudge" id="m-another">Draft another nudge</button></div>` : ''}`);
   const again = $('#m-another');
   if (again) again.onclick = () => openDraft(personId, 'followup');
 }
@@ -802,15 +907,19 @@ async function openDraft(personId, kind, slotLines) {
     ${gapNote}
     <label class="field"><span>Subject</span><input type="text" id="m-subject" value="${esc(draft.subject)}"></label>
     <label class="field"><span>Body</span><textarea id="m-text" rows="20">${esc(draft.body)}</textarea></label>
+    ${kind === 'thankyou' ? `<div class="row"><button class="btn primary" id="m-copy">Copy text</button>
+      <button class="btn" id="m-save">Save draft</button></div>` : `
     <div class="row">
       <button class="btn primary" id="m-open" data-id="${personId}" data-kind="${kind}">Open draft in Outlook</button>
       <button class="btn" id="m-copy">Copy text</button>
+      ${kind === 'outreach' ? '<button class="btn" id="m-save">Save draft</button>' : ''}
       <div class="spacer"></div>
       <span class="small faint">Nothing is sent. Outlook opens the draft for you to finish.</span>
-    </div>`;
+    </div>`}`;
 
   const textarea = $('#m-text');
   const sync = () => {
+    if (!$('#m-open')) return;
     const gaps = (textarea.value.match(/\[[^\[\]]{3,400}?\]/g) || []).length;
     $('#m-open').textContent = gaps ? `Open in Outlook (${gaps} unfilled)` : 'Open draft in Outlook';
     $('#m-open').classList.toggle('gold', gaps > 0);
@@ -823,7 +932,21 @@ async function openDraft(personId, kind, slotLines) {
     toast(await copyText(textarea.value) ? 'Copied' : 'Could not copy — select the text manually');
   };
 
-  $('#m-open').onclick = async (ev) => {
+  if ($('#m-save')) $('#m-save').onclick = async (ev) => {
+    const btn = ev.currentTarget;
+    btn.disabled = true;
+    try {
+      await api('/api/draft', 'POST', {
+        person_id: personId, kind, save_only: true,
+        subject: $('#m-subject').value, body: textarea.value,
+      });
+      toast('Draft saved');
+    } catch (e) {
+      toast(e.message, true);
+    } finally { btn.disabled = false; }
+  };
+
+  if ($('#m-open')) $('#m-open').onclick = async (ev) => {
     const btn = ev.currentTarget;
     btn.disabled = true;
     try {
@@ -1935,7 +2058,6 @@ async function openApplication(id, quiet = false) {
                       ${firm.knowledge.length} note${firm.knowledge.length === 1 ? '' : 's'} on file`
                    : 'Not one of the six target firms — no firm page for it.'}</div>
         </div>
-        ${app.target_firm ? `<button class="btn sm" data-firm="${esc(app.target_firm)}">Open ${esc(app.target_firm)} page</button>` : ''}
       </div>
     </div>
 
@@ -2391,7 +2513,7 @@ async function confirmSlot(personId, start, end, button) {
       ? `; ${cal.deleted} hold${cal.deleted === 1 ? '' : 's'} removed`
       : `; ${cal.deleted || 0} of ${res.holds} holds removed (delete the rest by hand)`;
     if (cal.error) msg += ` (Calendar: ${cal.error})`;
-    toast(msg + ' — next: Draft invite / Draft confirmation email in their panel', !!cal.error);
+    toast(msg + ' — next: Confirmation email in their panel', !!cal.error);
     await refresh();
     if (CURRENT && CURRENT.id === personId) await openPerson(personId, true);
   } catch (e) {
@@ -2463,9 +2585,15 @@ async function testOutlook() {
 }
 
 document.addEventListener('click', async (ev) => {
-  const t = ev.target.closest('[data-view], [data-open], [data-prep], [data-slots], [data-pdf], [data-draft], [data-sent], [data-status], [data-copy-text], [data-delnote], [data-goto], [data-resolve], [data-restore]');
+  const t = ev.target.closest('[data-view], [data-open], [data-prep], [data-slots], [data-pdf], [data-draft], [data-sent], [data-status], [data-copy-text], [data-delnote], [data-goto], [data-resolve], [data-restore], [data-afilter], [data-atoggle]');
   if (!t) return;
 
+  if (t.dataset.atoggle) {
+    SHOW_OTHERS = !SHOW_OTHERS;
+    try { localStorage.setItem('cct-show-others', SHOW_OTHERS ? '1' : '0'); } catch (e) { /* not kept */ }
+    return renderToday();
+  }
+  if (t.dataset.afilter) { ACTION_FILTER = t.dataset.afilter; return renderToday(); }
   if (t.dataset.resolve) {
     const action = (STATE.actions || []).find(a => a.key === t.dataset.resolve);
     if (!action) return;
@@ -2615,7 +2743,7 @@ document.addEventListener('change', (ev) => {
 document.addEventListener('toggle', (ev) => {
   const el = ev.target;
   if (!el.classList || !el.classList.contains('tree-firm')) return;
-  const firm = el.dataset.firm;
+  const firm = el.dataset.treeFirm;
   if (el.open) TREE_COLLAPSED_FIRMS.delete(firm);
   else TREE_COLLAPSED_FIRMS.add(firm);
 }, true);
@@ -2664,7 +2792,23 @@ document.addEventListener('click', async (ev) => {
     } catch (e) { return toast(e.message, true); }
   }
 
-  if (id === 'd-invite' || id === 'd-confirm-mail') {
+  if (id === 'd-confirm-mail') {
+    if (!CURRENT) return;
+    const first = (CURRENT.name || '').trim().split(' ')[0];
+    const emailText = `Hi ${first},\n\nThank you for getting back to me. I am sending the calendar invite accordingly. I hope you are fine with a zoom meeting, let me know otherwise.\n\nLooking forward to chatting with you.`;
+    const inviteText = `Hi ${first},\n\nSharing the invite based on the slot you suggested. I have attached my resume here for your reference. Looking forward to connecting!`;
+    openModal('Confirmation email — ' + CURRENT.name, `
+      <label class="field"><span>Email</span><textarea id="m-text-email" rows="7">${esc(emailText)}</textarea></label>
+      <div class="row" style="margin-bottom:16px"><button class="btn primary" data-copy-from="m-text-email">Copy email</button></div>
+      <label class="field"><span>Invite</span><textarea id="m-text-invite" rows="5">${esc(inviteText)}</textarea></label>
+      <div class="row"><button class="btn primary" data-copy-from="m-text-invite">Copy invite</button></div>`);
+    document.querySelectorAll('[data-copy-from]').forEach(b => b.onclick = async () => {
+      toast(await copyText($('#' + b.dataset.copyFrom).value) ? 'Copied' : 'Could not copy — select the text manually');
+    });
+    return;
+  }
+
+  if (id === 'd-invite') {
     if (!CURRENT) return;
     const btn = ev.target;
     btn.disabled = true;
@@ -2790,6 +2934,20 @@ document.addEventListener('click', async (ev) => {
   if (id === 'btn-test-calendar' || id === 'btn-side-cal') return testCalendar();
   if (id === 'btn-test-outlook' || id === 'btn-side-outlook') return testOutlook();
 
+  if (id === 'btn-claude-import') {
+    try {
+      const res = await api('/api/import', 'POST', {});
+      const rs = res.results || [];
+      const bad = rs.filter(r => r.error);
+      const label = r => r.name || (r.type === 'firm_knowledge' ? `${r.firm} notes (+${r.added})` : r.file);
+      if (!rs.length) toast('Nothing new to import');
+      else if (bad.length) toast(`Imported ${rs.length - bad.length}; failed: ${bad.map(r => r.file + ' — ' + r.error).join('; ')}`, true);
+      else toast(`Imported: ${rs.map(label).join(', ')}`);
+      await refresh();
+    } catch (e) { toast(e.message || String(e), true); }
+    return;
+  }
+
   if (id === 'btn-cal-pull') {
     try {
       const res = await api('/api/calendar/pull', 'POST', {});
@@ -2903,7 +3061,7 @@ document.addEventListener('click', async (ev) => {
   }
 
   if (t.dataset.app) return openApplication(parseInt(t.dataset.app, 10));
-  if (t.dataset.firm) return openFirm(t.dataset.firm);
+  if (t.dataset.firm) return; // Firms page removed — firm insights live with Claude now
   if (t.dataset.accept) return decideProposal({ id: parseInt(t.dataset.accept, 10), status: 'accepted' });
   if (t.dataset.reject) return decideProposal({ id: parseInt(t.dataset.reject, 10), status: 'rejected' });
   if (t.dataset.editAccept) return openEditProposal(parseInt(t.dataset.editAccept, 10));
@@ -2968,3 +3126,29 @@ window.addEventListener('pagehide', () => {
 });
 
 refresh().catch(e => toast(e.message, true));
+
+
+/* Sent / not sent ticks in the person window. They override whatever the app
+   inferred, and move the pipeline status the way sending would. */
+document.addEventListener('change', async (ev) => {
+  const box = ev.target.closest && ev.target.closest('[data-sent-toggle]');
+  if (!box || !CURRENT) return;
+  const kind = box.dataset.sentToggle, on = box.checked;
+  const flags = Object.assign(sentFlags(CURRENT), { [kind]: on });
+  const patch = { sent_flags: JSON.stringify(flags) };
+  const now = new Date().toISOString();
+  const st = CURRENT.status;
+  if (kind === 'outreach' && on && ['uninitiated', 'tracking'].includes(st)) {
+    patch.status = 'outreach_sent'; patch.first_contact_at = now;
+  }
+  if (kind === 'thankyou') {
+    if (on) { patch.thankyou_sent_at = now; if (st === 'chat_done') patch.status = 'thankyou_sent'; }
+    else { patch.thankyou_sent_at = null; if (st === 'thankyou_sent') patch.status = 'chat_done'; }
+  }
+  try {
+    await api('/api/person/' + CURRENT.id, 'POST', patch);
+    toast((on ? 'Marked as sent' : 'Marked as not sent'));
+    await refresh();
+    return openPerson(CURRENT.id, true);
+  } catch (e) { box.checked = !on; toast(e.message, true); }
+});

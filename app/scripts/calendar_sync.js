@@ -48,6 +48,7 @@ function run(argv) {
     var probes = dels.slice();
     if (up && up.match) probes.push(up.match);
     ensure.forEach(function (e) { probes.push(e); });
+    var calCache = {};   // before the move loop, which already calls pickCal
     var events = null;
     if (probes.length) {
       var lo = Infinity, hi = -Infinity;
@@ -69,21 +70,17 @@ function run(argv) {
     }
 
     var deleted = 0, updated = 0, created = 0, errors = [];
-    var moved = false;
+    var moved = false, oldRemoved = 0;
     var present = ensure.map(function () { return false; });
     for (var i = 0; events && i < events.count; i++) {
       var ev = events.objectAtIndex(i);
-      if (up && up.match && !moved && hit(ev, { prefix: up.prefix, start: up.match.start, end: up.match.end })) {
-        ev.title = $(up.title);
-        if (up.calendar) {
-          var target = pickCal(up.calendar);
-          if (target && !(target.isNil && target.isNil())) ev.calendar = target;
-        }
-        ev.startDate = nsdate(ms(up.start));
-        ev.endDate = nsdate(ms(up.end));
-        if (up.notes) ev.notes = $(up.notes);
-        if (store.saveEventSpanCommitError(ev, $.EKSpanThisEvent, true, $())) { updated++; moved = true; }
-        else errors.push('could not move the chat');
+      if (up && up.match && hit(ev, { prefix: up.prefix, start: up.match.start, end: up.match.end })) {
+        // Rescheduling: remove the old chat event (every copy at the old time)
+        // and create a fresh one below. Editing in place failed silently when
+        // the event had to change calendar (e.g. default -> Home), which left
+        // the old event behind next to a new one.
+        if (store.removeEventSpanCommitError(ev, $.EKSpanThisEvent, true, $())) oldRemoved++;
+        else errors.push('could not remove the old chat event');
         continue;
       }
       var kept = false;
@@ -100,7 +97,6 @@ function run(argv) {
       }
     }
 
-    var calCache = {};
     function pickCal(name) {
       if (name && calCache[name] !== undefined) return calCache[name];
       var found = null;
@@ -138,6 +134,25 @@ function run(argv) {
       if (!present[e2] && make(ensure[e2])) created++;
     }
 
+    // Also clear chat events for this person left at any other future time
+    // (an earlier failed reschedule could leave one behind while the tracker
+    // had already moved on). Only when rescheduling.
+    if (up && up.match) {
+      var sweep = store.predicateForEventsWithStartDateEndDateCalendars(
+        $.NSDate.date, nsdate(Date.now() + 180 * 86400e3), $());
+      var later = store.eventsMatchingPredicate(sweep);
+      for (var q = 0; later && q < later.count; q++) {
+        var lv = later.objectAtIndex(q);
+        var lt = ObjC.unwrap(lv.title) || '';
+        if (lt.indexOf(up.prefix) !== 0) continue;
+        var rest = lt.slice(up.prefix.length);
+        if (rest && rest.indexOf(' (') !== 0) continue;   // another person whose name starts the same
+        if (Math.abs(lv.startDate.timeIntervalSince1970 * 1000 - ms(up.start)) <= 60e3) continue;
+        if (store.removeEventSpanCommitError(lv, $.EKSpanThisEvent, true, $())) oldRemoved++;
+        else errors.push('could not remove an old chat event');
+      }
+    }
+
     if (up && !moved) {
       var cal = pickCal(up.calendar);
       if (!cal || cal.isNil && cal.isNil()) {
@@ -149,11 +164,12 @@ function run(argv) {
         ne.startDate = nsdate(ms(up.start));
         ne.endDate = nsdate(ms(up.end));
         if (up.notes) ne.notes = $(up.notes);
-        if (store.saveEventSpanCommitError(ne, $.EKSpanThisEvent, true, $())) created++;
-        else errors.push('could not create the chat event');
+        if (store.saveEventSpanCommitError(ne, $.EKSpanThisEvent, true, $())) {
+          if (oldRemoved) updated++; else created++;
+        } else errors.push('could not create the chat event');
       }
     }
-    return JSON.stringify({ ok: true, deleted: deleted, updated: updated, created: created, errors: errors });
+    return JSON.stringify({ ok: true, deleted: deleted, replaced: oldRemoved, updated: updated, created: created, errors: errors });
   } catch (e) {
     return JSON.stringify({ ok: false, error: String(e.message || e) });
   }

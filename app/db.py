@@ -130,6 +130,18 @@ CREATE TABLE IF NOT EXISTS resolved_action (
     session     TEXT DEFAULT ''
 );
 
+-- Follow-ups Claude adds after a chat (people to contact, things to watch
+-- for). Ticking one off goes through resolved_action like any other action,
+-- keyed "todo:<key>", so this table only ever grows by import.
+CREATE TABLE IF NOT EXISTS followup_item (
+    key         TEXT PRIMARY KEY,
+    person_id   INTEGER REFERENCES person(id) ON DELETE SET NULL,
+    firm        TEXT DEFAULT '',
+    text        TEXT NOT NULL,
+    due         TEXT DEFAULT '',
+    created_at  TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_person_status ON person(status);
 CREATE INDEX IF NOT EXISTS idx_note_person  ON note(person_id);
 CREATE INDEX IF NOT EXISTS idx_mail_person  ON mail_event(person_id);
@@ -372,6 +384,8 @@ DEFAULT_SETTINGS = {
     "user_name": "",
     # Put in the chat invite (location + body) and the confirmation email.
     "zoom_link": "",
+    "zoom_meeting_id": "",
+    "zoom_passcode": "",
     "user_email": "",
     "user_program": "Class of 2028 | Master of Business Administration (M.B.A.)",
     "user_school": "Goizueta Business School | Emory University",
@@ -527,7 +541,7 @@ PERSON_FIELDS = [
     "thankyou_sent_at", "followups_sent", "next_action", "next_action_date",
     "linkedin_raw", "profile_updated_at", "offered_slots", "offered_slots_at",
     "profile_pdf", "archived",
-    "research_md", "research_sources", "prep_md", "draft_subject", "draft_body",
+    "research_md", "research_sources", "prep_md", "draft_subject", "draft_body", "thankyou_subject", "thankyou_body", "sent_flags",
     "researched_at", "invite_drafted_at", "confirm_drafted_at",
 ]
 
@@ -546,6 +560,9 @@ MIGRATIONS = [
     ("person", "prep_md", "TEXT DEFAULT ''"),
     ("person", "draft_subject", "TEXT DEFAULT ''"),
     ("person", "draft_body", "TEXT DEFAULT ''"),
+    ("person", "thankyou_subject", "TEXT DEFAULT ''"),
+    ("person", "thankyou_body", "TEXT DEFAULT ''"),
+    ("person", "sent_flags", "TEXT DEFAULT ''"),
     ("person", "researched_at", "TEXT"),
     # After a slot is confirmed: the Outlook invite and the confirmation reply.
     ("person", "invite_drafted_at", "TEXT"),
@@ -1222,5 +1239,29 @@ def proposal_batches():
     try:
         return {r["batch_id"]: dict(r) for r in conn.execute(
             "SELECT * FROM proposal_batch").fetchall()}
+    finally:
+        conn.close()
+
+
+def upsert_followup(key, text, person_id=None, firm="", due=""):
+    conn = connect()
+    try:
+        conn.execute(
+            "INSERT INTO followup_item(key, person_id, firm, text, due) VALUES (?,?,?,?,?) "
+            "ON CONFLICT(key) DO UPDATE SET person_id=excluded.person_id, firm=excluded.firm, "
+            "text=excluded.text, due=excluded.due",
+            (key, person_id, firm or "", text, due or ""))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_followups():
+    conn = connect()
+    try:
+        rows = conn.execute(
+            "SELECT f.*, p.name AS person_name FROM followup_item f "
+            "LEFT JOIN person p ON p.id = f.person_id ORDER BY f.created_at").fetchall()
+        return [dict(r) for r in rows]
     finally:
         conn.close()
