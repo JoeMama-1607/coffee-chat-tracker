@@ -143,6 +143,29 @@ class ImportTest(unittest.TestCase):
         self.drop("f.json", {"type": "followups", "items": [{"done": True}]})
         self.assertIn("needs a key", self.run_import()["error"])
 
+    def test_followup_ticked_by_its_own_key(self):
+        db.upsert_followup("mck-apply", "Apply to McKinsey", None, "McKinsey", "")
+        self.drop("f.json", {"type": "followups", "items": [{"key": "mck-apply"}]})
+        result = self.run_import()
+        self.assertEqual(result["done"], ["mck-apply"])
+        self.assertIn("todo:mck-apply", db.resolved_keys())
+        research.write_snapshots()
+        with open(os.path.join(self.root, "followups.json"), encoding="utf-8") as fh:
+            [item] = json.load(fh)["followups"]
+        self.assertTrue(item["done"])
+        self.assertEqual(item["text"], "Apply to McKinsey")
+
+    def test_people_snapshot_carries_nudge_fields(self):
+        db.create_person({"name": "Jane Doe", "status": "outreach_sent",
+                          "last_outbound_at": "2026-09-20T09:00:00-04:00",
+                          "followups_sent": 1})
+        research.write_snapshot()
+        with open(os.path.join(self.root, "people.json"), encoding="utf-8") as fh:
+            [row] = json.load(fh)["people"]
+        self.assertEqual(row["last_outbound_at"], "2026-09-20T09:00:00-04:00")
+        self.assertEqual(row["followups_sent"], 1)
+        self.assertIn("last_inbound_at", row)
+
     def test_actions_snapshot_written(self):
         _, action = self.thankyou_owed()
         research.write_snapshots()

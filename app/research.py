@@ -105,7 +105,9 @@ with "text" files a follow-up (above); an item without "text" ticks by key:
        {"key": "followup:7:2026-09-20T09:12:00-04:00:0", "done": false}]}
 
   - "key" is required on every item and is copied verbatim from
-    research/actions.json — the same key the Today list uses. Keys carry the
+    research/actions.json — the same key the Today list uses. A follow-up
+    can also be ticked by its own key from research/followups.json
+    ("pwc-csx-contact"); the "todo:" prefix is added for you. Keys carry the
     situation behind them (the last email, the chat time), so a newer email
     or a moved chat mints a new key and the old one comes back "not_found".
   - "done": true (the default) ticks the action off, exactly like its tick in
@@ -126,7 +128,8 @@ app, each atomically through a temp file: research/applications.json,
 research/firms.json, research/resume_walk.json, research/proposals.json,
 research/actions.json (the open Today actions, with their keys),
 research/followups.json —
-plus research/people.json, unchanged. actions.json lists each open action's
+plus research/people.json, which also carries last_outbound_at,
+last_inbound_at and followups_sent so Locked In can time nudges. actions.json lists each open action's
 key, kind, person_id, name, label, detail and urgency; ticked-off actions are
 not in it. research/last_import.json reports what
 each file did, including its type and any error, so a write can be verified.
@@ -374,20 +377,28 @@ def _followups_file(data, people, stamp):
         added += 1
     open_now = {a["key"]: a for a in HOOKS["open_actions"]()} if ticks else {}
     done, reopened, unchanged, missing = [], [], [], []
+    resolved = db.resolved_keys()
     for key, item in ticks:
-        ticked = key in db.resolved_keys()
+        # A follow-up's own key ("mck-apply", as in followups.json and Locked
+        # In) stands for its Today action, "todo:mck-apply".
+        if key not in open_now and key not in resolved and (
+                "todo:" + key in open_now or "todo:" + key in resolved):
+            act = "todo:" + key
+        else:
+            act = key
+        ticked = act in db.resolved_keys()
         if item.get("done", True):
             if ticked:
                 unchanged.append(key)
-            elif key in open_now:
-                HOOKS["tick_action"](open_now[key])
+            elif act in open_now:
+                HOOKS["tick_action"](open_now[act])
                 done.append(key)
             else:
                 missing.append(key)
         elif ticked:
-            HOOKS["untick_action"](key)
+            HOOKS["untick_action"](act)
             reopened.append(key)
-        elif key in open_now:
+        elif act in open_now:
             unchanged.append(key)
         else:
             missing.append(key)
@@ -396,7 +407,6 @@ def _followups_file(data, people, stamp):
 
 
 HANDLERS = {
-    "followups": _followups_file,
     "person": _person_file,
     "application": _application_file,
     "firm_knowledge": _firm_knowledge_file,
@@ -560,7 +570,8 @@ def write_snapshot():
     if not os.path.isdir(ROOT):
         return
     keep = ("id", "name", "firm", "role", "office", "email", "linkedin", "status",
-            "grad_year", "is_alum", "chat_at", "researched_at")
+            "grad_year", "is_alum", "chat_at", "researched_at",
+            "last_outbound_at", "last_inbound_at", "followups_sent")
     rows = []
     for p in db.list_people(include_archived=False):
         row = {k: p.get(k) for k in keep}
