@@ -25,6 +25,16 @@ A file looks like:
 }
 Only the keys present are written, so a file can update one part.
 
+A person file may also carry "profile_pdf_file": "profiles/<slug>.pdf" (a
+LinkedIn PDF Claude saved under research/); it is stored like an upload.
+
+    {"type": "person_action", "action": "confirm_slot", "person_id": 12,
+     "start": iso, "end": iso}      # also: reschedule (start, end), cancel_chat,
+                                    # set_status (status), note (body, kind),
+                                    # archive (archived: true|false)
+Locked In queues these; only the app can write Calendar. "name" may stand in
+for "person_id". A failure leaves the file in the inbox with its reason.
+
 A top-level "type" picks what the file is. No "type" means a person research
 file, exactly as above — that is the original shape and it still works.
 
@@ -154,7 +164,9 @@ DONE = os.path.join(ROOT, "imported")
 # open_actions() -> list, tick_action(action), untick_action(key) for
 # followups files.
 HOOKS = {"make_draft": None, "slot_lines": None, "save_slots": None,
-         "open_actions": None, "tick_action": None, "untick_action": None}
+         "open_actions": None, "tick_action": None, "untick_action": None,
+         "person_action": None, "attach_pdf": None, "slot_state": None,
+         "slot_windows": None}
 
 # Person columns a research file may set directly.
 ALLOWED = {"email", "firm", "role", "office", "linkedin", "grad_year", "is_alum",
@@ -234,6 +246,19 @@ def _person_file(data, people, stamp):
         if not res.get("ok"):
             raise RuntimeError(res.get("error") or "could not save slots")
         result["offered_slots"] = res.get("lines", [])
+    # "profile_pdf_file": "profiles/jane-doe.pdf" — a LinkedIn PDF Claude saved
+    # under research/. Stored with the person exactly like an upload.
+    pdf_rel = data.get("profile_pdf_file")
+    if pdf_rel:
+        if HOOKS["attach_pdf"] is None:
+            raise RuntimeError("PDF attach unavailable")
+        src = os.path.normpath(os.path.join(ROOT, pdf_rel))
+        if not src.startswith(os.path.normpath(ROOT) + os.sep) or not os.path.isfile(src):
+            raise ValueError("profile_pdf_file %r not found under research/" % pdf_rel)
+        res = HOOKS["attach_pdf"](pid, src)
+        if not res.get("ok"):
+            raise RuntimeError(res.get("error") or "could not attach the PDF")
+        result["profile_pdf"] = True
     # "outlook_draft": {"kind": "outreach"|"thankyou", "subject", "body"} —
     # opens a real Outlook draft (never sent). {{SLOTS}} / {{HORIZON}} are
     # filled from the windows saved on the person in the app.
@@ -408,7 +433,18 @@ def _followups_file(data, people, stamp):
             "reopened": reopened, "unchanged": unchanged, "not_found": missing}
 
 
+def _person_action_file(data, people, stamp):
+    """{"type": "person_action", "action": "confirm_slot"|"reschedule"|
+    "cancel_chat"|"set_status"|"note"|"archive", "person_id" or "name", ...}
+    — what Aashish did to a person in Locked In, applied here because only
+    the app can touch Calendar. See server.apply_person_action."""
+    if HOOKS["person_action"] is None:
+        raise RuntimeError("person actions unavailable")
+    return HOOKS["person_action"](data, people, stamp)
+
+
 HANDLERS = {
+    "person_action": _person_action_file,
     "person": _person_file,
     "application": _application_file,
     "firm_knowledge": _firm_knowledge_file,
@@ -586,12 +622,19 @@ def write_snapshot():
     keep = ("id", "name", "firm", "role", "office", "email", "linkedin", "status",
             "grad_year", "is_alum", "chat_at", "researched_at",
             "last_outbound_at", "last_inbound_at", "followups_sent",
-            "referred_by", "referred_by_name")
+            "referred_by", "referred_by_name", "first_contact_at",
+            "thankyou_sent_at")
     rows = []
     for p in db.list_people(include_archived=False):
         row = {k: p.get(k) for k in keep}
         row["has_prep"] = bool((p.get("prep_md") or "").strip())
         row["has_draft"] = bool((p.get("draft_body") or "").strip())
+        row["has_thankyou"] = bool((p.get("thankyou_body") or "").strip())
+        row["slots_state"] = (HOOKS["slot_state"](p) if HOOKS["slot_state"] else "") or ""
+        row["saved_windows"] = (HOOKS["slot_windows"](p) if HOOKS["slot_windows"] else None) or []
+        row["notes"] = [{"kind": n.get("kind"), "body": n.get("body"),
+                         "at": n.get("created_at")}
+                        for n in (p.get("notes") or [])[:5]]
         row["saved_slots"] = (HOOKS["slot_lines"](p) if HOOKS["slot_lines"] else None) or []
         row["profile_pdf"] = _share_profile_pdf(p)
         rows.append(row)

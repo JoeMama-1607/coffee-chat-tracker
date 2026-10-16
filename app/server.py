@@ -964,6 +964,138 @@ def untick_action(key):
     db.restore_action(key)
 
 
+def _person_for(data, people):
+    """Find the person an action is about: id first, then exact name."""
+    if data.get("person_id") not in (None, ""):
+        p = db.get_person(int(data["person_id"]))
+        if p:
+            return p
+    name = (data.get("name") or "").strip().casefold()
+    hits = [p for p in people if (p.get("name") or "").strip().casefold() == name]
+    if len(hits) == 1:
+        return db.get_person(hits[0]["id"])
+    raise LookupError("no single person matches %r / id %r"
+                      % (data.get("name"), data.get("person_id")))
+
+
+def _action_window(data, tz):
+    start = availability.parse_iso(data.get("start"))
+    end = availability.parse_iso(data.get("end"))
+    if not start or not end or end <= start:
+        raise ValueError("a start and a later end time are required")
+    return start, end
+
+
+def apply_person_action(data, people, stamp):
+    """Apply one thing Aashish did in Locked In. Idempotent enough to retry:
+    the inbox file is only archived after this returns."""
+    settings = db.get_settings()
+    tz = availability.get_tz(settings.get("timezone", "America/New_York"))
+    action = (data.get("action") or "").strip()
+    person = _person_for(data, people)
+    pid = person["id"]
+    out = {"type": "person_action", "action": action, "person_id": pid,
+           "name": person.get("name")}
+
+    if action in ("confirm_slot", "reschedule"):
+        start, end = _action_window(data, tz)
+        deletes = []
+        if action == "confirm_slot":
+            prefix = settings.get("hold_prefix") or "Coffee chat hold"
+            title = "%s — %s" % (prefix, person.get("name") or "")
+            deletes = [(title, s_, e_) for s_, e_, _held in _offered_slots(person)]
+        cal = _sync_chat(person, settings, deletes, (start, end), _chat_start(person, tz))
+        if not (cal.get("created") or cal.get("updated")):
+            raise RuntimeError("the calendar was not updated: %s"
+                               % (cal.get("error") or "unknown reason"))
+        patch = {"chat_at": start.astimezone(tz).replace(tzinfo=None).isoformat()}
+        if action == "confirm_slot":
+            patch.update({"offered_slots": "", "offered_slots_at": None})
+        if person.get("status") not in ("chat_done", "thankyou_sent"):
+            patch["status"] = "scheduled"
+        db.update_person(pid, patch)
+        out.update({"chat_at": patch["chat_at"], "calendar": cal})
+        return out
+
+    if action == "cancel_chat":
+        old = _chat_start(person, tz)
+        cal = {"ok": True, "deleted": 0}
+        if old:
+            cal = macos.calendar_sync(delete=[(_chat_title(person), old, None)])
+        patch = {"chat_at": None}
+        if person.get("status") == "scheduled":
+            patch["status"] = "outreach_sent"
+        db.update_person(pid, patch)
+        out["calendar"] = cal
+        return out
+
+    if action == "set_status":
+        status = data.get("status")
+        if status not in {k for k, _ in db.STATUSES}:
+            raise ValueError("unknown status %r" % status)
+        patch = {"status": status}
+        if status == "thankyou_sent" and not person.get("thankyou_sent_at"):
+            patch["thankyou_sent_at"] = stamp
+        if status == "outreach_sent" and not person.get("first_contact_at"):
+            patch["first_contact_at"] = data.get("sent_at") or stamp
+            patch["last_outbound_at"] = data.get("sent_at") or stamp
+        db.update_person(pid, patch)
+        out["status"] = status
+        return out
+
+    if action == "note":
+        body = (data.get("body") or "").strip()
+        if not body:
+            raise ValueError("a note needs a body")
+        db.add_note(pid, body, data.get("kind") or "note")
+        return out
+
+    if action == "archive":
+        db.update_person(pid, {"archived": 1 if data.get("archived", True) else 0})
+        return out
+
+    raise ValueError("unknown action %r — one of confirm_slot, reschedule, "
+                     "cancel_chat, set_status, note, archive" % action)
+
+
+def attach_profile_pdf(pid, path):
+    """A LinkedIn PDF Claude saved under research/ — kept like an upload."""
+    try:
+        with open(path, "rb") as fh:
+            blob = fh.read()
+    except OSError as exc:
+        return {"ok": False, "error": str(exc)}
+    if not pdfreader.looks_like_pdf(blob):
+        return {"ok": False, "error": "that is not a PDF file"}
+    try:
+        text = pdfreader.extract_text(blob)
+    except pdfreader.PdfError as exc:
+        return {"ok": False, "error": str(exc)}
+    settings = db.get_settings()
+    stamp = dt.datetime.now(availability.get_tz(settings.get("timezone"))).isoformat()
+    db.update_person(pid, {"linkedin_raw": text, "profile_updated_at": stamp,
+                           "profile_pdf": _store_pdf(blob, "person-%d" % pid)})
+    return {"ok": True}
+
+
+def slot_state_for(person):
+    """"" (none), "held" (all on the calendar) or "proposed" (some not yet)."""
+    wins = _offered_slots(person)
+    if not wins:
+        return ""
+    return "proposed" if any(not held for _s, _e, held in wins) else "held"
+
+
+research.HOOKS["person_action"] = apply_person_action
+research.HOOKS["attach_pdf"] = attach_profile_pdf
+def slot_windows_for(person):
+    """The offered windows as ISO strings, for Locked In's Confirm buttons."""
+    return [{"start": s_.isoformat(), "end": e_.isoformat(), "held": bool(held)}
+            for s_, e_, held in sorted(_offered_slots(person))]
+
+
+research.HOOKS["slot_windows"] = slot_windows_for
+research.HOOKS["slot_state"] = slot_state_for
 research.HOOKS["save_slots"] = save_offered_slots
 research.HOOKS["make_draft"] = outlook_draft_for
 research.HOOKS["slot_lines"] = lambda p: stored_slot_lines(p)
