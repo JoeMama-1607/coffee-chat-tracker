@@ -578,3 +578,24 @@ mark.gap { background: rgba(242, 169, 0, .35); color: inherit; border-radius: 3p
 
 .fchip.toggle { margin-left: auto; border-style: dashed; }
 .fchip.toggle span { opacity: .7; }
+
+
+/* ---------------------------------------------------- simple window */
+body.simple .nav-item { display: none; }
+.simple-resume { font-size: 13px; color: var(--text-muted); margin: 0 0 16px; }
+.simple-resume strong { color: var(--text); font-weight: 600; }
+.simple-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  padding: 16px 18px; margin: 0 0 12px; max-width: 640px;
+}
+.sc-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.sc-top .faint { display: block; font-size: 13px; margin-top: 2px; }
+.sc-kind {
+  font-size: 11.5px; font-weight: 600; letter-spacing: .02em; padding: 3px 9px;
+  border-radius: 999px; background: var(--info-bg); color: var(--navy-700); white-space: nowrap;
+}
+.sc-slots { margin: 12px 0 0; padding-left: 18px; font-size: 14px; color: var(--text); }
+.sc-slots.none { list-style: none; padding-left: 0; color: var(--text-faint); }
+.sc-note { font-size: 12.5px; margin-top: 8px; font-weight: 600; }
+.sc-note.ok { color: var(--ok); }
+.sc-note.warn { color: var(--warn); }

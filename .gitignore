@@ -29,3 +29,9 @@ research/
 
 # Held-back research files (real names).
 research_hold/
+
+# Personal: the two-button window flag, the master resume copy, and
+# database backups (real names).
+SIMPLE_MODE
+resume-latest/
+backups/

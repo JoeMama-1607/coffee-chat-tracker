@@ -60,6 +60,103 @@ def _same(a, b):
             and abs((a[1] - b[1]).total_seconds()) < 60)
 
 
+def _offered_slots(person):
+    """Saved windows as (start, end, held). `held` says whether the busy hold
+    is on Apple Calendar yet. Windows saved before the flag existed have no
+    marker and count as held: back then, saving always wrote the hold."""
+    try:
+        saved = json.loads(person.get("offered_slots") or "null") or {}
+    except ValueError:
+        saved = {}
+    out = []
+    for day in saved.get("days", []):
+        for w in day.get("windows", []):
+            s_ = availability.parse_iso(w.get("start"))
+            e_ = availability.parse_iso(w.get("end"))
+            if s_ and e_:
+                out.append((s_, e_, w.get("held", True) is not False))
+    return out
+
+
+def _pending_slots(person, settings, now=None):
+    """Proposed windows that are not on the calendar yet (still to sync)."""
+    now = now or dt.datetime.now(
+        availability.get_tz(settings.get("timezone", "America/New_York")))
+    return [(s_, e_) for s_, e_, held in _offered_slots(person)
+            if not held and e_ > now]
+
+
+def simple_mode_on(settings):
+    """The two-button window. A setting wins; with none, a SIMPLE_MODE file
+    beside the app folder turns it on, so a copy sent to a classmate stays full."""
+    value = (settings.get("simple_mode") or "").strip()
+    if value in ("0", "1"):
+        return value == "1"
+    return os.path.exists(os.path.join(os.path.dirname(HERE), "SIMPLE_MODE"))
+
+
+# The master resume. resume-latest/SOURCE.txt names where it lives (iCloud
+# Drive, which macOS keeps the app out of on some Macs); a copy sits beside it,
+# put there by Claude or refreshed here when the app is allowed to read it.
+MASTER_RESUME_DIR = os.path.join(os.path.dirname(HERE), "resume-latest")
+
+
+def _refresh_master_resume():
+    """Copy the master next to the app if it can be read and has changed.
+    Never raises: the copy already there is still a good resume."""
+    try:
+        note = os.path.join(MASTER_RESUME_DIR, "SOURCE.txt")
+        if not os.path.isfile(note):
+            return
+        with open(note, encoding="utf-8") as fh:
+            src = os.path.expanduser(fh.read().strip())
+        if not (src and os.path.isfile(src) and os.access(src, os.R_OK)):
+            return
+        dest = os.path.join(MASTER_RESUME_DIR, os.path.basename(src))
+        if (os.path.isfile(dest) and os.path.getsize(dest) == os.path.getsize(src)
+                and os.path.getmtime(dest) >= os.path.getmtime(src)):
+            return
+        with open(src, "rb") as fh:
+            data = fh.read()
+        if not data.startswith(b"%PDF"):
+            return
+        tmp = dest + ".tmp"
+        with open(tmp, "wb") as out:
+            out.write(data)
+        os.replace(tmp, dest)
+    except OSError:
+        pass
+
+
+def _master_resume_path():
+    try:
+        files = [os.path.join(MASTER_RESUME_DIR, n) for n in os.listdir(MASTER_RESUME_DIR)
+                 if n.lower().endswith(".pdf") and not n.startswith(".")]
+    except OSError:
+        return ""
+    files = [f for f in files if os.access(f, os.R_OK)]
+    return max(files, key=os.path.getmtime) if files else ""
+
+
+def master_resume():
+    _refresh_master_resume()
+    return _master_resume_path()
+
+
+def resume_info(settings):
+    """Which resume would go with a draft right now, for the simple window."""
+    path = _master_resume_path()
+    source = "master" if path else ""
+    if not path:
+        stored = (settings.get("resume_file") or "").strip()
+        if stored and os.path.isfile(stored) and os.access(stored, os.R_OK):
+            path, source = stored, "stored"
+    if not path:
+        return {"ok": False, "name": "", "source": "", "copied_at": ""}
+    return {"ok": True, "name": os.path.basename(path), "source": source,
+            "copied_at": dt.datetime.fromtimestamp(os.path.getmtime(path)).isoformat(timespec="minutes")}
+
+
 def _sync_holds(person, settings, old_windows, new_windows):
     """Busy holds on Apple Calendar for exactly `new_windows`."""
     title = _hold_title(person, settings)
@@ -80,27 +177,37 @@ def _sync_holds(person, settings, old_windows, new_windows):
 
 
 def _days_from_windows(windows, tz):
-    """Group (start, end) pairs into the slot finder's day/window structure."""
+    """Group (start, end[, held]) windows into the slot finder's day/window
+    structure. A third item adds a `held` flag to the window."""
     days = {}
-    for start, end in sorted(windows):
+    for item in sorted(windows):
+        start, end = item[0], item[1]
         ls, le = start.astimezone(tz), end.astimezone(tz)
         day = days.setdefault(ls.date(), {
             "date": ls.date().isoformat(),
             "label": availability.fmt_day(ls.date()),
             "windows": []})
-        day["windows"].append({
+        win = {
             "start": ls.isoformat(), "end": le.isoformat(),
             "text": "%s – %s" % (availability.fmt_time(ls), availability.fmt_time(le)),
-            "minutes": int((le - ls).total_seconds() // 60)})
+            "minutes": int((le - ls).total_seconds() // 60)}
+        if len(item) > 2:
+            win["held"] = bool(item[2])
+        day["windows"].append(win)
     return [days[k] for k in sorted(days)]
 
 
-def pull_from_calendar(settings):
-    """Make the tracker match edits made directly in Apple Calendar.
+def pull_from_calendar(settings, person_id=None):
+    """Sync with calendar: both directions, for one person or for everyone.
 
-    Holds titled `<hold_prefix> — <name>` become that person's saved slots
-    (moved, added or deleted in Calendar), and a moved `Coffee chat — <name>`
-    event moves the chat. Nothing on the calendar is changed.
+    * Slots Claude proposed that are not on the calendar yet get their busy
+      holds written (the first Sync).
+    * Holds that are on the calendar are the truth for those slots: move one,
+      add one or delete one in Calendar and the saved slots, and so the times
+      in the email, follow (the next Sync).
+    * A moved `Coffee chat - <name>` event moves the chat.
+    A calendar read that comes back with no events at all is treated as a
+    failed read, never as "every hold was deleted".
     """
     tz = availability.get_tz(settings.get("timezone", "America/New_York"))
     now = dt.datetime.now(tz)
@@ -111,28 +218,49 @@ def pull_from_calendar(settings):
         s, e = availability.parse_iso(ev.get("start")), availability.parse_iso(ev.get("end"))
         if s and e and not ev.get("all_day"):
             parsed.append(((ev.get("title") or "").strip(), s, e))
+    unreadable = not parsed
 
     changes = []
     tz_label = settings.get("tz_label", "ET")
     for person in db.list_people():
+        if person_id is not None and person.get("id") != person_id:
+            continue
         name = person.get("name") or ""
         if not name:
             continue
         hold = _hold_title(person, settings)
-        found = sorted({(s, e) for t, s, e in parsed if t == hold and e > now})
-        saved = [w for w in _offered_windows(person) if w[1] > now]
-        same = (len(found) == len(saved)
-                and all(any(_same(f, w) for w in saved) for f in found))
-        if not same and (found or saved):
-            if found:
-                days = _days_from_windows(found, tz)
-                payload = json.dumps({
-                    "lines": availability.format_slot_lines(days, tz_label),
-                    "days": days})
+        saved = [(s, e, h) for s, e, h in _offered_slots(person) if e > now]
+        held_saved = [(s, e) for s, e, h in saved if h]
+        on_cal = sorted({(s, e) for t, s, e in parsed if t == hold and e > now})
+        if unreadable:
+            on_cal = sorted(set(held_saved))
+        pending = [(s, e) for s, e, h in saved
+                   if not h and not any(_same((s, e), c) for c in on_cal)]
+
+        written_ok = True
+        if pending:
+            res = _sync_holds(person, settings, [], pending)
+            written_ok = not res.get("error") and res.get("ok", True) is not False
+            if not written_ok:
+                changes.append({"name": name, "kind": "calendar_error",
+                                "lines": [res.get("error") or "could not write the holds"]})
+        final = ([(s, e, True) for s, e in on_cal]
+                 + [(s, e, written_ok) for s, e in pending])
+        same = (len(final) == len(saved)
+                and all(any(_same(f, w) and f[2] == w[2] for w in saved) for f in final))
+        if not same and (final or saved):
+            if final:
+                days = _days_from_windows(final, tz)
+                lines = availability.format_slot_lines(days, tz_label)
                 db.update_person(person["id"], {
-                    "offered_slots": payload, "offered_slots_at": now.isoformat()})
-                changes.append({"name": name, "kind": "slots",
-                                "lines": availability.format_slot_lines(days, tz_label)})
+                    "offered_slots": json.dumps({"lines": lines, "days": days}),
+                    "offered_slots_at": now.isoformat()})
+                edited = (len(on_cal) != len(held_saved)
+                          or not all(any(_same(c, w) for w in held_saved) for c in on_cal))
+                if pending and written_ok:
+                    changes.append({"name": name, "kind": "slots_added", "lines": lines})
+                if edited:
+                    changes.append({"name": name, "kind": "slots", "lines": lines})
             else:
                 db.update_person(person["id"], {"offered_slots": "", "offered_slots_at": None})
                 changes.append({"name": name, "kind": "slots_cleared", "lines": []})
@@ -495,6 +623,9 @@ def resume_attachment(settings):
 
     Everything that mentions or attaches a resume goes through this, so the
     email never says "I've attached my resume" when nothing would be attached."""
+    master = master_resume()
+    if master:
+        return master
     path = (settings.get("resume_file") or "").strip()
     if path and os.path.isfile(path) and os.access(path, os.R_OK):
         return path
@@ -589,6 +720,9 @@ def outlook_draft_for(pid, kind, subject, body):
         return {"ok": False, "error": "person not found"}
     if kind not in ("outreach", "thankyou"):
         return {"ok": False, "error": "kind must be outreach or thankyou"}
+    if kind == "outreach" and _pending_slots(person, settings):
+        return {"ok": False, "error": "the slots for %s are not on your calendar yet - "
+                "click Sync with calendar first" % person["name"]}
     lines = stored_slot_lines(person) if kind == "outreach" else None
     if kind == "outreach" and not lines:
         return {"ok": False, "error": "no slots saved for %s yet — pick them in "
@@ -623,8 +757,16 @@ def outlook_draft_for(pid, kind, subject, body):
             "attached_resume": bool(attachment), "demo": bool(result.get("demo"))}
 
 
-def save_offered_slots(pid, windows):
-    """Windows Claude chose, saved exactly like Suggest slots → Save."""
+def save_offered_slots(pid, windows, hold=False):
+    """Windows Claude chose.
+
+    By default (how the inbox saves them) they are only *proposed*: saved on
+    the person, used by the email, shown as "not on your calendar yet". Sync
+    with calendar puts the holds on Apple Calendar. hold=True writes them at
+    once, like Suggest slots -> Save. Holds already on the calendar for
+    windows that are no longer wanted are removed right away, so Sync never
+    mistakes them for something you added.
+    """
     settings = db.get_settings()
     person = db.get_person(pid)
     if not person:
@@ -636,12 +778,21 @@ def save_offered_slots(pid, windows):
         if not s_ or not e_ or e_ <= s_:
             return {"ok": False, "error": "bad window %r" % (w,)}
         pairs.append((s_, e_))
-    old = _offered_windows(person)
-    calendar = _sync_holds(person, settings, old, pairs)
+    old = _offered_slots(person)
+    old_held = [(s_, e_) for s_, e_, h in old if h]
+    if hold:
+        calendar = _sync_holds(person, settings, [(s_, e_) for s_, e_, _h in old], pairs)
+        ok = not calendar.get("error") and calendar.get("ok", True) is not False
+        flags = [ok] * len(pairs)
+    else:
+        gone = [o for o in old_held if not any(_same(o, p_) for p_ in pairs)]
+        calendar = (_sync_holds(person, settings, gone, []) if gone
+                    else {"ok": True, "deleted": 0, "created": 0, "errors": []})
+        flags = [any(_same(p_, o) for o in old_held) for p_ in pairs]
     if not pairs:
         db.update_person(pid, {"offered_slots": "", "offered_slots_at": None})
         return {"ok": True, "lines": [], "calendar": calendar}
-    days = _days_from_windows(pairs, tz)
+    days = _days_from_windows([(s_, e_, f) for (s_, e_), f in zip(pairs, flags)], tz)
     lines = availability.format_slot_lines(days, settings.get("tz_label", "ET"))
     db.update_person(pid, {
         "offered_slots": json.dumps({"lines": lines, "days": days}),
@@ -680,7 +831,7 @@ def _zoom_block(settings):
     zoom = (settings.get("zoom_link") or "").strip()
     if not zoom:
         return ""
-    block = "\n\nJoin Zoom Meeting\n%s" % zoom
+    block = "\n\nJoin Zoom Meeting: %s" % zoom
     mid = (settings.get("zoom_meeting_id") or "").strip()
     pwd = (settings.get("zoom_passcode") or "").strip()
     extra = "\n".join(x for x in (
@@ -1125,8 +1276,15 @@ def state_payload():
         people = db.list_people()   # re-read so everything below sees the move
     applications = db.list_applications()
     firms = research.firms_payload()
+    now_local = dt.datetime.now(
+        availability.get_tz(settings.get("timezone", "America/New_York")))
+    for p in people:
+        p["slots_pending"] = len(_pending_slots(p, settings, now_local))
+        p["slots_lines"] = stored_slot_lines(p) or []
     return {
         "settings": settings,
+        "simple": simple_mode_on(settings),
+        "resume": resume_info(settings),
         "people": people,
         "statuses": [{"key": k, "label": l} for k, l in db.STATUSES],
         "actions": compute_actions(people, settings, db.resolved_keys()),
@@ -1799,9 +1957,10 @@ class Handler(BaseHTTPRequestHandler):
                     pass
             return self._json({"ok": True, "results": report})
 
-        if path == "/api/calendar/pull":
+        if path in ("/api/calendar/pull", "/api/calendar/sync"):
             try:
-                return self._json(pull_from_calendar(settings))
+                pid = body.get("person_id")
+                return self._json(pull_from_calendar(settings, int(pid) if pid else None))
             except macos.BridgeError as exc:
                 return self._error(str(exc), 502)
 
@@ -1867,6 +2026,11 @@ class Handler(BaseHTTPRequestHandler):
 
         kind = body.get("kind", "outreach")
         lines = body.get("slot_lines")
+        if (body.get("open_in_outlook") and kind in ("outreach", "followup")
+                and lines is None and _pending_slots(person, settings)):
+            return self._error("Those slots are not on your calendar yet. Click "
+                               "Sync with calendar first, so the email only offers "
+                               "times you are actually holding.", 409)
         if lines is None and kind in ("outreach", "followup"):
             # Times you actually picked for this person beat a fresh guess —
             # otherwise the email offers different slots than the calendar
@@ -1959,6 +2123,7 @@ def main():
     args = parser.parse_args()
 
     db.init()
+    db.record_counts()
     try:
         research.write_snapshots()
     except OSError:

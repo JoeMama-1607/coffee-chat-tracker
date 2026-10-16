@@ -438,6 +438,9 @@ DEFAULT_SETTINGS = {
     "hold_calendar": "",
     "chat_calendar": "",
     # follow-up policy, straight from the deck
+    # "1" = the two-button window, "0" = the full app, "" = follow the
+    # SIMPLE_MODE flag file beside the app folder (so a shared copy stays full).
+    "simple_mode": "",
     "followup_after_days": "7",
     "max_followups": "3",
     "thankyou_within_hours": "24",
@@ -508,8 +511,82 @@ def backup_once(tag):
     return dest
 
 
+def repo_root():
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def backup_root():
+    """backups/ beside the app (CCT_BACKUP_ROOT overrides it, for tests)."""
+    return os.environ.get("CCT_BACKUP_ROOT") or os.path.join(repo_root(), "backups")
+
+
+def table_counts(conn=None):
+    """Row count of every table: the yardstick for "nothing was lost"."""
+    own = conn is None
+    if own:
+        conn = connect()
+    try:
+        names = [r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+        return {n: conn.execute('SELECT COUNT(*) FROM "%s"' % n).fetchone()[0]
+                for n in names}
+    finally:
+        if own:
+            conn.close()
+
+
+def snapshot_visible(tag):
+    """Once per tag: a copy of the database plus every table's row count,
+    kept in the app folder (backups/<date>-<tag>/) where it can be inspected.
+    Never raises: a backup problem must not stop the app from opening."""
+    import glob
+    import json
+    try:
+        src = db_path()
+        if not os.path.isfile(src):
+            return None
+        root = backup_root()
+        if glob.glob(os.path.join(root, "*-%s" % tag, "tracker.sqlite3")):
+            return None
+        folder = os.path.join(root, "%s-%s" % (time.strftime("%Y-%m-%d"), tag))
+        os.makedirs(folder, exist_ok=True)
+        dest = os.path.join(folder, "tracker.sqlite3")
+        conn = connect()
+        try:
+            out = sqlite3.connect(dest)
+            with out:
+                conn.backup(out)
+            out.close()
+            counts = table_counts(conn)
+        finally:
+            conn.close()
+        with open(os.path.join(folder, "counts.json"), "w", encoding="utf-8") as fh:
+            json.dump({"at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                       "db_bytes": os.path.getsize(dest), "counts": counts}, fh, indent=2)
+        return folder
+    except (OSError, sqlite3.Error):
+        return None
+
+
+def record_counts():
+    """backups/counts-latest.json: today's row counts, rewritten at every
+    start, so a before/after comparison is one diff away."""
+    import json
+    try:
+        root = backup_root()
+        os.makedirs(root, exist_ok=True)
+        with open(os.path.join(root, "counts-latest.json"), "w", encoding="utf-8") as fh:
+            json.dump({"at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                       "counts": table_counts()}, fh, indent=2)
+    except (OSError, sqlite3.Error):
+        pass
+
+
 def init():
     backup_once("pre-applications")
+    backup_once("pre-simplify")
+    snapshot_visible("pre-simplify")
     conn = connect()
     try:
         conn.executescript(SCHEMA)

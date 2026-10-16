@@ -162,6 +162,7 @@ async function refresh() {
   renderFirms();
   renderReview();
   renderConnections();
+  renderSimple();
   fillSettings();
   fillResumeWalk();
   updateNavCounts();
@@ -196,6 +197,106 @@ function renderConnections() {
     setStatusDot('#status-outlook', 'bad', 'Outlook unavailable');
   }
 }
+
+/* ------------------------------------------------------ simple window */
+
+const SIMPLE_KIND = { outreach: 'Outreach', thankyou: 'Thank-you', followup: 'Nudge' };
+
+/* Only drafts that are actually ready appear. Nobody without one is listed. */
+function simpleReady() {
+  const nudge = new Set((STATE.actions || []).filter(a => a.kind === 'followup').map(a => a.person_id));
+  const out = [];
+  for (const p of STATE.people) {
+    const st = p.status;
+    if ((st === 'uninitiated' || st === 'tracking') && (p.draft_body || '').trim()) out.push({ p, kind: 'outreach' });
+    else if (st === 'chat_done' && (p.thankyou_body || '').trim()) out.push({ p, kind: 'thankyou' });
+    else if (nudge.has(p.id)) out.push({ p, kind: 'followup' });
+  }
+  return out;
+}
+
+function renderSimple() {
+  const simple = !!STATE.simple;
+  document.body.classList.toggle('simple', simple);
+  const tog = $('#btn-simple-toggle');
+  if (tog) tog.textContent = simple ? 'Full view' : 'Simple window';
+  if (!simple) {
+    if ($('#view-simple').classList.contains('active')) switchView('today');
+    return;
+  }
+  $$('.view').forEach(v => v.classList.toggle('active', v.id === 'view-simple'));
+
+  const ready = simpleReady();
+  $('#simple-lede').textContent = ready.length
+    ? 'Open each one in Outlook. Opening a draft counts it as sent.'
+    : 'Nothing is waiting. When Claude has drafts ready, click Pull changes from Claude.';
+
+  const r = STATE.resume || {};
+  let when = '';
+  if (r.copied_at) {
+    const d = new Date(r.copied_at);
+    if (!isNaN(d)) when = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+      + ', ' + d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  }
+  $('#simple-resume').innerHTML = r.ok
+    ? `<div class="simple-resume">Resume on every outreach: <strong>${esc(r.name)}</strong>
+        ${when ? `<span class="faint">· copied ${esc(when)}</span>` : ''}
+        ${r.source === 'stored' ? '<span class="faint">· the app’s older stored copy</span>' : ''}</div>`
+    : `<div class="banner warn"><strong>No resume found.</strong> Outreach drafts will open without an attachment.</div>`;
+
+  $('#simple-list').innerHTML = ready.map(({ p, kind }) => {
+    const lines = kind === 'thankyou' ? [] : (p.slots_lines || []);
+    let slots = '';
+    if (lines.length) {
+      slots = `<ul class="sc-slots">${lines.map(l => `<li>${esc(l)}</li>`).join('')}</ul>
+        <div class="sc-note ${p.slots_pending ? 'warn' : 'ok'}">${p.slots_pending
+          ? 'Not on your calendar yet. Sync with calendar.' : 'Held on your calendar'}</div>`;
+    } else if (kind === 'outreach') {
+      slots = '<ul class="sc-slots none"><li>No slots picked yet.</li></ul>';
+    }
+    return `<div class="simple-card">
+      <div class="sc-top"><div><strong>${esc(p.name)}</strong>
+        <span class="faint">${esc([p.firm, p.role].filter(Boolean).join(' · '))}</span></div>
+        <span class="sc-kind">${SIMPLE_KIND[kind]}</span></div>
+      ${slots}
+      <div class="row" style="gap:8px;margin-top:12px">
+        <button class="btn primary" data-simple-open="${p.id}" data-kind="${kind}">Open in Outlook</button>
+        <button class="btn ghost sm" data-open="${p.id}">Details</button>
+      </div></div>`;
+  }).join('');
+}
+
+/* One click: line the times up with the calendar, build the email from them,
+   open it in Outlook. Opening counts as sent, so the person leaves the list. */
+async function simpleOpen(personId, kind, btn) {
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Opening…';
+  try {
+    if (kind !== 'thankyou') await api('/api/calendar/sync', 'POST', { person_id: personId });
+    const draft = await api('/api/draft', 'POST', { person_id: personId, kind });
+    if (draft.unfilled && draft.unfilled.length) {
+      await refresh();
+      return openDraft(personId, kind);       // something still needs writing: show it
+    }
+    const res = await api('/api/draft', 'POST', {
+      person_id: personId, kind, subject: draft.subject, body: draft.body, open_in_outlook: true,
+    });
+    if (res.ok) toast(res.demo ? 'Demo mode: no draft created' : 'Draft open in Outlook');
+    else toast(res.error || 'Could not create the draft', true);
+    await refresh();
+  } catch (e) {
+    toast(e.message || String(e), true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
+document.addEventListener('click', (ev) => {
+  const b = ev.target.closest('[data-simple-open]');
+  if (b) simpleOpen(parseInt(b.dataset.simpleOpen, 10), b.dataset.kind, b);
+});
 
 function updateNavCounts() {
   const deadlines = STATE.deadlines || [];
@@ -3108,15 +3209,32 @@ document.addEventListener('click', async (ev) => {
     return;
   }
 
-  if (id === 'btn-cal-pull') {
+  if (id === 'btn-simple-toggle') {
     try {
-      const res = await api('/api/calendar/pull', 'POST', {});
-      const n = res.changes.length;
-      toast(n ? `Updated from Calendar: ${res.changes.map(c => c.name).join(', ')}`
-              : 'Already matches your calendar');
+      await api('/api/settings', 'POST', { simple_mode: STATE.simple ? '0' : '1' });
+      await refresh();
+    } catch (e) { toast(e.message || String(e), true); }
+    return;
+  }
+
+  if (id === 'btn-cal-pull') {
+    const btn = $('#btn-cal-pull');
+    btn.disabled = true;
+    try {
+      const res = await api('/api/calendar/sync', 'POST', {});
+      const changes = res.changes || [];
+      const bad = changes.filter(c => c.kind === 'calendar_error');
+      const word = { slots_added: 'now on your calendar', slots: 'updated from your calendar',
+                     slots_cleared: 'slots cleared', chat_moved: 'chat moved' };
+      const good = changes.filter(c => c.kind !== 'calendar_error');
+      if (bad.length) toast('Calendar problem: ' + bad.map(c => `${c.name} (${c.lines[0]})`).join('; '), true);
+      else toast(good.length ? 'Synced: ' + good.map(c => `${c.name}, ${word[c.kind] || c.kind}`).join(' · ')
+                             : 'Already in sync with your calendar');
       await refresh();
     } catch (e) {
       toast(e.message || String(e), true);
+    } finally {
+      btn.disabled = false;
     }
     return;
   }

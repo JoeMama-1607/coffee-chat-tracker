@@ -44,11 +44,21 @@
       <div class="conn-row" style="margin-top:5px"><span id="status-outlook"><span class="dot warn"></span>Outlook not checked</span>
         <button class="retry" id="btn-side-outlook" title="Re-check Outlook" aria-label="Re-check Outlook">↻</button></div>
       <button class="btn sm pull pull-claude" id="btn-claude-import" style="margin-top:8px;width:100%">Pull changes from Claude</button>
-      <button class="btn sm pull pull-cal" id="btn-cal-pull" style="margin-top:6px;width:100%">Pull changes from Calendar</button>
+      <button class="btn sm pull pull-cal" id="btn-cal-pull" style="margin-top:6px;width:100%"
+        title="Puts proposed slots on Apple Calendar, then reads back what you moved there">Sync with calendar</button>
+      <button class="btn ghost sm" id="btn-simple-toggle" style="margin-top:12px;width:100%">Simple window</button>
     </div>
   </nav>
 
   <main class="main">
+
+    <!-- ------------------------------------------------------ SIMPLE -->
+    <section class="view" id="view-simple">
+      <h1>Ready to send</h1>
+      <p class="lede" id="simple-lede"></p>
+      <div id="simple-resume"></div>
+      <div id="simple-list"></div>
+    </section>
 
     <!-- ------------------------------------------------------- TODAY -->
     <section class="view active" id="view-today">
